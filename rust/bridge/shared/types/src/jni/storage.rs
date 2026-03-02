@@ -1,0 +1,429 @@
+//
+// Copyright 2021 Signal Messenger, LLC.
+// SPDX-License-Identifier: AGPL-3.0-only
+//
+
+use std::cell::RefCell;
+
+use async_trait::async_trait;
+use uuid::Uuid;
+
+use super::*;
+// TODO: This re-export is because of the jni_arg_type macro expecting all bridging structs to
+// appear in the jni module.
+pub use crate::protocol::storage::JavaPreKeyStore;
+
+pub type JavaIdentityKeyStore<'a> = JObject<'a>;
+// pub type JavaPreKeyStore<'a> = JObject<'a>;
+pub type JavaSignedPreKeyStore<'a> = JObject<'a>;
+pub type JavaKyberPreKeyStore<'a> = JObject<'a>;
+pub type JavaSessionStore<'a> = JObject<'a>;
+pub type JavaSenderKeyStore<'a> = JObject<'a>;
+
+pub struct JniIdentityKeyStore<'a> {
+    env: RefCell<EnvHandle<'a>>,
+    store: &'a JObject<'a>,
+}
+
+impl<'a> JniIdentityKeyStore<'a> {
+    pub fn new<'context: 'a>(
+        env: &mut JNIEnv<'context>,
+        store: &'a JObject<'a>,
+    ) -> Result<Self, BridgeLayerError> {
+        check_jobject_type(
+            env,
+            store,
+            ClassName("org.signal.libsignal.protocol.state.IdentityKeyStore"),
+        )?;
+        Ok(Self {
+            env: EnvHandle::new(env).into(),
+            store,
+        })
+    }
+}
+
+#[derive(Debug, derive_more::From)]
+enum BridgeOrProtocolError {
+    Bridge(BridgeLayerError),
+    Protocol(SignalProtocolError),
+}
+
+impl From<BridgeOrProtocolError> for SignalProtocolError {
+    fn from(value: BridgeOrProtocolError) -> Self {
+        match value {
+            BridgeOrProtocolError::Protocol(e) => e,
+            BridgeOrProtocolError::Bridge(e) => match e {
+                BridgeLayerError::BadJniParameter(m) => {
+                    SignalProtocolError::InvalidArgument(m.to_string())
+                }
+                BridgeLayerError::CallbackException(callback, exception) => {
+                    SignalProtocolError::ApplicationCallbackError(callback, Box::new(exception))
+                }
+                err => SignalProtocolError::FfiBindingError(format!("{err}")),
+            },
+        }
+    }
+}
+
+impl JniIdentityKeyStore<'_> {
+    fn do_get_identity_key_pair(&self) -> Result<IdentityKeyPair, BridgeOrProtocolError> {
+        self.env
+            .borrow_mut()
+            .with_local_frame(8, "getIdentityKeyPair", |env| {
+                let callback_args = jni_args!(() -> org.signal.libsignal.protocol.IdentityKeyPair);
+                let bits = get_object_with_serialization(
+                    env,
+                    self.store,
+                    callback_args,
+                    "getIdentityKeyPair",
+                )?;
+
+                match bits {
+                    None => Err(SignalProtocolError::InvalidState(
+                        "get_identity_key_pair",
+                        "no local identity key".to_string(),
+                    )
+                    .into()),
+                    Some(k) => Ok(IdentityKeyPair::try_from(k.as_ref())?),
+                }
+            })
+    }
+
+    fn do_get_local_registration_id(&self) -> Result<u32, BridgeLayerError> {
+        self.env
+            .borrow_mut()
+            .with_local_frame(8, "getLocalRegistrationId", |env| {
+                let i: jint = call_method_checked(
+                    env,
+                    self.store,
+                    "getLocalRegistrationId",
+                    jni_args!(() -> int),
+                )?;
+                u32::convert_from(env, &i)
+            })
+    }
+
+    fn do_save_identity(
+        &mut self,
+        address: &ProtocolAddress,
+        identity: &IdentityKey,
+    ) -> Result<IdentityChange, BridgeLayerError> {
+        self.env
+            .borrow_mut()
+            .with_local_frame(8, "saveIdentity", |env| {
+                let address_jobject = protocol_address_to_jobject(env, address)?;
+                let key_handle = identity.public_key().convert_into(env)?;
+                let key_jobject = jobject_from_native_handle(
+                    env,
+                    ClassName("org.signal.libsignal.protocol.IdentityKey"),
+                    key_handle,
+                )?;
+                let callback_args = jni_args!((
+                    address_jobject => org.signal.libsignal.protocol.SignalProtocolAddress,
+                    key_jobject => org.signal.libsignal.protocol.IdentityKey
+                ) -> org.signal.libsignal.protocol.state.IdentityKeyStore::IdentityChange);
+                let result = call_method_checked(env, self.store, "saveIdentity", callback_args)?;
+                let result = call_method_checked(env, result, "ordinal", jni_args!(() -> int))?;
+                result
+                    .try_into()
+                    .ok()
+                    .and_then(|v: isize| IdentityChange::try_from(v).ok())
+                    .ok_or_else(|| {
+                        BridgeLayerError::IntegerOverflow(format!(
+                            "{result} invalid as IdentityChange"
+                        ))
+                    })
+            })
+    }
+
+    fn do_is_trusted_identity(
+        &self,
+        address: &ProtocolAddress,
+        identity: &IdentityKey,
+        direction: Direction,
+    ) -> Result<bool, BridgeLayerError> {
+        self.env
+            .borrow_mut()
+            .with_local_frame(8, "isTrustedIdentity", |env| {
+                let address_jobject = protocol_address_to_jobject(env, address)?;
+                let key_handle = identity.public_key().convert_into(env)?;
+                let key_jobject = jobject_from_native_handle(
+                    env,
+                    ClassName("org.signal.libsignal.protocol.IdentityKey"),
+                    key_handle,
+                )?;
+
+                let direction_class = find_class(
+                    env,
+                    ClassName("org.signal.libsignal.protocol.state.IdentityKeyStore$Direction"),
+                ).check_exceptions(env, "isTrustedIdentity")?;
+                let field_name = match direction {
+                    Direction::Sending => "SENDING",
+                    Direction::Receiving => "RECEIVING",
+                };
+
+                let field_value: JObject = env
+                    .get_static_field(
+                        direction_class,
+                        field_name,
+                        jni_signature!(org.signal.libsignal.protocol.state.IdentityKeyStore::Direction),
+                    )
+                    .check_exceptions(env, field_name)?
+                    .try_into()
+                    .expect("already checked type");
+
+                let callback_args = jni_args!((
+                    address_jobject => org.signal.libsignal.protocol.SignalProtocolAddress,
+                    key_jobject => org.signal.libsignal.protocol.IdentityKey,
+                    field_value => org.signal.libsignal.protocol.state.IdentityKeyStore::Direction,
+                ) -> boolean);
+                let result: jboolean =
+                    call_method_checked(env, self.store, "isTrustedIdentity", callback_args)?;
+
+                Ok(result != 0)
+            })
+    }
+
+    fn do_get_identity(
+        &self,
+        address: &ProtocolAddress,
+    ) -> Result<Option<IdentityKey>, BridgeOrProtocolError> {
+        self.env
+            .borrow_mut()
+            .with_local_frame(8, "getIdentity", |env| {
+                let address_jobject = protocol_address_to_jobject(env, address)?;
+                let callback_args = jni_args!((
+                    address_jobject => org.signal.libsignal.protocol.SignalProtocolAddress,
+                ) -> org.signal.libsignal.protocol.IdentityKey);
+
+                let bits =
+                    get_object_with_serialization(env, self.store, callback_args, "getIdentity")?;
+
+                match bits {
+                    None => Ok(None),
+                    Some(k) => Ok(Some(IdentityKey::decode(&k)?)),
+                }
+            })
+    }
+}
+
+#[async_trait(? Send)]
+impl IdentityKeyStore for JniIdentityKeyStore<'_> {
+    async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair, SignalProtocolError> {
+        Ok(self.do_get_identity_key_pair()?)
+    }
+
+    async fn get_local_registration_id(&self) -> Result<u32, SignalProtocolError> {
+        Ok(self
+            .do_get_local_registration_id()
+            .map_err(BridgeOrProtocolError::from)?)
+    }
+
+    async fn save_identity(
+        &mut self,
+        address: &ProtocolAddress,
+        identity: &IdentityKey,
+    ) -> Result<IdentityChange, SignalProtocolError> {
+        Ok(self
+            .do_save_identity(address, identity)
+            .map_err(BridgeOrProtocolError::from)?)
+    }
+
+    async fn is_trusted_identity(
+        &self,
+        address: &ProtocolAddress,
+        identity: &IdentityKey,
+        direction: Direction,
+    ) -> Result<bool, SignalProtocolError> {
+        Ok(self
+            .do_is_trusted_identity(address, identity, direction)
+            .map_err(BridgeOrProtocolError::from)?)
+    }
+
+    async fn get_identity(
+        &self,
+        address: &ProtocolAddress,
+    ) -> Result<Option<IdentityKey>, SignalProtocolError> {
+        Ok(self.do_get_identity(address)?)
+    }
+}
+
+pub struct JniSessionStore<'a> {
+    env: RefCell<EnvHandle<'a>>,
+    store: &'a JObject<'a>,
+}
+
+impl<'a> JniSessionStore<'a> {
+    pub fn new<'context: 'a>(
+        env: &mut JNIEnv<'context>,
+        store: &'a JObject<'a>,
+    ) -> Result<Self, BridgeLayerError> {
+        check_jobject_type(
+            env,
+            store,
+            ClassName("org.signal.libsignal.protocol.state.SessionStore"),
+        )?;
+        Ok(Self {
+            env: EnvHandle::new(env).into(),
+            store,
+        })
+    }
+}
+
+impl JniSessionStore<'_> {
+    fn do_load_session(
+        &self,
+        address: &ProtocolAddress,
+    ) -> Result<Option<SessionRecord>, BridgeLayerError> {
+        self.env
+            .borrow_mut()
+            .with_local_frame(8, "loadSession", |env| {
+                let address_jobject = protocol_address_to_jobject(env, address)?;
+
+                let callback_args = jni_args!((
+                    address_jobject => org.signal.libsignal.protocol.SignalProtocolAddress
+                ) -> org.signal.libsignal.protocol.state.SessionRecord);
+                get_object_with_native_handle(env, self.store, callback_args, "loadSession")
+            })
+    }
+
+    fn do_store_session(
+        &mut self,
+        address: &ProtocolAddress,
+        record: &SessionRecord,
+    ) -> Result<(), BridgeLayerError> {
+        self.env
+            .borrow_mut()
+            .with_local_frame(8, "storeSession", |env| {
+                let address_jobject = protocol_address_to_jobject(env, address)?;
+                let record_handle = record.clone().convert_into(env)?;
+                let session_jobject = jobject_from_native_handle(
+                    env,
+                    ClassName("org.signal.libsignal.protocol.state.SessionRecord"),
+                    record_handle,
+                )?;
+
+                let callback_args = jni_args!((
+                    address_jobject => org.signal.libsignal.protocol.SignalProtocolAddress,
+                    session_jobject => org.signal.libsignal.protocol.state.SessionRecord,
+                ) -> void);
+                call_method_checked(env, self.store, "storeSession", callback_args)?;
+                Ok(())
+            })
+    }
+}
+
+#[async_trait(? Send)]
+impl SessionStore for JniSessionStore<'_> {
+    async fn load_session(
+        &self,
+        address: &ProtocolAddress,
+    ) -> Result<Option<SessionRecord>, SignalProtocolError> {
+        Ok(self
+            .do_load_session(address)
+            .map_err(BridgeOrProtocolError::from)?)
+    }
+
+    async fn store_session(
+        &mut self,
+        address: &ProtocolAddress,
+        record: &SessionRecord,
+    ) -> Result<(), SignalProtocolError> {
+        Ok(self
+            .do_store_session(address, record)
+            .map_err(BridgeOrProtocolError::from)?)
+    }
+}
+
+pub struct JniSenderKeyStore<'a> {
+    env: RefCell<EnvHandle<'a>>,
+    store: &'a JObject<'a>,
+}
+
+impl<'a> JniSenderKeyStore<'a> {
+    pub fn new<'context: 'a>(
+        env: &mut JNIEnv<'context>,
+        store: &'a JObject<'a>,
+    ) -> Result<Self, BridgeLayerError> {
+        check_jobject_type(
+            env,
+            store,
+            ClassName("org.signal.libsignal.protocol.groups.state.SenderKeyStore"),
+        )?;
+        Ok(Self {
+            env: EnvHandle::new(env).into(),
+            store,
+        })
+    }
+}
+
+impl JniSenderKeyStore<'_> {
+    fn do_store_sender_key(
+        &mut self,
+        sender: &ProtocolAddress,
+        distribution_id: Uuid,
+        record: &SenderKeyRecord,
+    ) -> Result<(), BridgeOrProtocolError> {
+        self.env
+            .borrow_mut()
+            .with_local_frame(8, "storeSenderKey", |env| {
+                let sender_jobject = protocol_address_to_jobject(env, sender)?;
+                let distribution_id_jobject = distribution_id.convert_into(env)?;
+                let record_handle = record.clone().convert_into(env)?;
+                let sender_key_record_jobject = jobject_from_native_handle(
+                    env,
+                    ClassName("org.signal.libsignal.protocol.groups.state.SenderKeyRecord"),
+                    record_handle,
+                )?;
+
+                let callback_args = jni_args!((
+                    sender_jobject => org.signal.libsignal.protocol.SignalProtocolAddress,
+                    distribution_id_jobject => java.util.UUID,
+                    sender_key_record_jobject => org.signal.libsignal.protocol.groups.state.SenderKeyRecord,
+                ) -> void);
+                call_method_checked(env, self.store, "storeSenderKey", callback_args)?;
+
+                Ok(())
+            })
+    }
+
+    fn do_load_sender_key(
+        &mut self,
+        sender: &ProtocolAddress,
+        distribution_id: Uuid,
+    ) -> Result<Option<SenderKeyRecord>, BridgeLayerError> {
+        self.env
+            .borrow_mut()
+            .with_local_frame(8, "loadSenderKey", |env| {
+                let sender_jobject = protocol_address_to_jobject(env, sender)?;
+                let distribution_id_jobject = distribution_id.convert_into(env)?;
+                let callback_args = jni_args!((
+                    sender_jobject => org.signal.libsignal.protocol.SignalProtocolAddress,
+                    distribution_id_jobject => java.util.UUID,
+                ) -> org.signal.libsignal.protocol.groups.state.SenderKeyRecord);
+                get_object_with_native_handle(env, self.store, callback_args, "loadSenderKey")
+            })
+    }
+}
+
+#[async_trait(? Send)]
+impl SenderKeyStore for JniSenderKeyStore<'_> {
+    async fn store_sender_key(
+        &mut self,
+        sender: &ProtocolAddress,
+        distribution_id: Uuid,
+        record: &SenderKeyRecord,
+    ) -> Result<(), SignalProtocolError> {
+        Ok(self.do_store_sender_key(sender, distribution_id, record)?)
+    }
+
+    async fn load_sender_key(
+        &mut self,
+        sender: &ProtocolAddress,
+        distribution_id: Uuid,
+    ) -> Result<Option<SenderKeyRecord>, SignalProtocolError> {
+        Ok(self
+            .do_load_sender_key(sender, distribution_id)
+            .map_err(BridgeOrProtocolError::from)?)
+    }
+}
