@@ -3,15 +3,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import { randomBytes } from 'node:crypto';
-import { RANDOM_LENGTH } from '../internal/Constants.js';
-import * as Native from '../../Native.js';
+import { randomBytes } from 'crypto';
+import { RANDOM_LENGTH } from '../internal/Constants';
+import * as Native from '../../../Native';
 
-import ServerSecretParams from '../ServerSecretParams.js';
-import AuthCredentialPresentation from './AuthCredentialPresentation.js';
-import AuthCredentialWithPniResponse from './AuthCredentialWithPniResponse.js';
-import GroupPublicParams from '../groups/GroupPublicParams.js';
-import { Aci, Pni } from '../../Address.js';
+import ServerSecretParams from '../ServerSecretParams';
+import AuthCredentialPresentation from './AuthCredentialPresentation';
+import AuthCredentialWithPniResponse from './AuthCredentialWithPniResponse';
+import GroupPublicParams from '../groups/GroupPublicParams';
+import { Aci, Pni } from '../../Address';
 
 export default class ServerZkAuthOperations {
   serverSecretParams: ServerSecretParams;
@@ -36,7 +36,7 @@ export default class ServerZkAuthOperations {
   }
 
   issueAuthCredentialWithPniZkcWithRandom(
-    random: Uint8Array,
+    random: Buffer,
     aci: Aci,
     pni: Pni,
     redemptionTime: number

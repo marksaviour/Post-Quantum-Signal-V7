@@ -19,7 +19,7 @@ use serde_json::value::RawValue;
 use strum::EnumCount;
 
 use crate::cert_chain::CertChain;
-use crate::dcap::ecdsa::{EcdsaSigned, deserialize_ecdsa_signature};
+use crate::dcap::ecdsa::{deserialize_ecdsa_signature, EcdsaSigned};
 use crate::dcap::revocation_list::RevocationList;
 use crate::dcap::{Error, Expireable, Result};
 use crate::endian::UInt32LE;
@@ -106,12 +106,9 @@ impl TryFrom<&[u8]> for SgxEndorsements {
 
         let (offsets, data) = src.split_at(offsets_required_size);
 
-        let (offsets, offsets_remainder) = offsets.as_chunks::<{ std::mem::size_of::<u32>() }>();
-        // offsets_required_size is a multiple of std::mem::size_of::<u32>
-        assert!(offsets_remainder.is_empty());
         let offsets = offsets
-            .iter()
-            .map(|d| u32::from_le_bytes(*d) as usize)
+            .chunks_exact(4)
+            .map(|d| u32::from_le_bytes(d.try_into().expect("correct size")) as usize)
             .collect::<Vec<usize>>();
 
         validate_offsets(&offsets, data)?;
@@ -307,9 +304,13 @@ mod tests {
 
     #[test]
     fn make_endorsements_header() {
-        let data: &[u8] = include_bytes!("../../tests/data/dcap.endorsements");
-        let (header, _remaining) =
-            EndorsementsHeader::read_from_prefix(data).expect("failed to parse header");
+        let data: [u8; std::mem::size_of::<EndorsementsHeader>()] =
+            include_bytes!("../../tests/data/dcap.endorsements")
+                [..std::mem::size_of::<EndorsementsHeader>()]
+                .try_into()
+                .unwrap();
+
+        let header = EndorsementsHeader::read_from_bytes(&data).expect("failed to parse header");
 
         assert_eq!(1, header.version.get());
         assert_eq!(2, header.enclave_type.get()) // oe_enclave_type_t (include/openenclave/bits/types.h)
@@ -325,11 +326,9 @@ mod tests {
             TcbStatus::SWHardeningNeeded,
             tcb_info.tcb_levels[0].tcb_status
         );
-        assert!(
-            tcb_info.tcb_levels[0]
-                .advisory_ids
-                .contains(&"INTEL-SA-00657".to_owned())
-        );
+        assert!(tcb_info.tcb_levels[0]
+            .advisory_ids
+            .contains(&"INTEL-SA-00657".to_owned()));
         assert_eq!(
             [7, 9, 3, 3, 255, 255, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             tcb_info.tcb_levels[0].tcb.components()

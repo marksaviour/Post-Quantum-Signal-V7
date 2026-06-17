@@ -4,7 +4,7 @@
 //
 
 use const_str::hex;
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, Criterion};
 
 pub fn hash(c: &mut Criterion) {
     // let mut group = c.benchmark_group("pin_hash");

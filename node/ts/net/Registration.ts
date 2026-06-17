@@ -5,14 +5,13 @@
 
 import type { ReadonlyDeep } from 'type-fest';
 
-import * as Native from '../Native.js';
-import { LibSignalError, RateLimitedError } from '../Errors.js';
-import { type Net, type TokioAsyncContext } from '../net.js';
-import { PublicKey } from '../EcKeys.js';
-import { Aci, Pni, ServiceIdKind } from '../Address.js';
-import { SignedKyberPublicPreKey, SignedPublicPreKey } from '../index.js';
-import { newNativeHandle } from '../internal.js';
-import { FakeChatRemote } from './FakeChat.js';
+import * as Native from '../../Native';
+import { LibSignalError, RateLimitedError } from '../Errors';
+import { type Net, type TokioAsyncContext } from '../net';
+import { PublicKey } from '../EcKeys';
+import { Aci, Pni, ServiceIdKind } from '../Address';
+import { SignedKyberPublicPreKey, SignedPublicPreKey } from '..';
+import { newNativeHandle } from '../internal';
 
 type ConnectionManager = Native.Wrapper<Native.ConnectionManager>;
 
@@ -138,16 +137,6 @@ export class RegistrationService {
     return this.sessionState;
   }
 
-  /**
-   * Request that a verification code be sent via the given transport method.
-   *
-   * With the websocket transport, this makes a POST request to
-   * `/v1/verification/session/{sessionId}/code`.
-   *
-   * The `languages` parameter should be a list of languages in Accept-Language syntax. Note that
-   * "quality weighting" can be left out; the Signal server will always consider the list to be in
-   * priority order.
-   */
   public async requestVerification({
     transport,
     client,
@@ -265,15 +254,15 @@ export class RegistrationService {
   /**
    * Create a registration client that sends requests to the returned fake chat.
    *
-   * Calling code will need to await and use the returned fake chat remote
-   * to respond in order for the returned Promise<RegistrationService> to resolve.
+   * Calling code will need to retrieve the first fake remote from the fake chat
+   * server and respond in order for the returned Promise to resolve.
    *
    * Internal, only public for testing
    */
   static fakeCreateSession(
     tokio: TokioAsyncContext,
     { e164 }: CreateSessionArgs
-  ): [Promise<RegistrationService>, Promise<FakeChatRemote>] {
+  ): [Promise<RegistrationService>, Native.Wrapper<Native.FakeChatServer>] {
     const server = newNativeHandle(Native.TESTING_FakeChatServer_Create());
     const registration = async () => {
       const handle = await Native.TESTING_FakeRegistrationSession_CreateSession(
@@ -284,14 +273,7 @@ export class RegistrationService {
       return new RegistrationService(handle, tokio);
     };
 
-    const remote = async () => {
-      return new FakeChatRemote(
-        tokio,
-        await Native.TESTING_FakeChatServer_GetNextRemote(tokio, server)
-      );
-    };
-
-    return [registration(), remote()];
+    return [registration(), server];
   }
 }
 
@@ -330,11 +312,11 @@ export class AccountAttributes {
     const capabilitiesArray = Array.from(capabilities);
 
     this._nativeHandle = Native.RegistrationAccountAttributes_Create(
-      recoveryPassword,
+      Buffer.from(recoveryPassword),
       aciRegistrationId,
       pniRegistrationId,
       registrationLock,
-      unidentifiedAccessKey,
+      Buffer.from(unidentifiedAccessKey),
       unrestrictedUnidentifiedAccess,
       capabilitiesArray,
       discoverableByPhoneNumber
@@ -361,10 +343,10 @@ export class RegisterAccountResponse {
     return Native.RegisterAccountResponse_GetNumber(this);
   }
 
-  public get usernameHash(): Uint8Array | null {
+  public get usernameHash(): Buffer | null {
     return Native.RegisterAccountResponse_GetUsernameHash(this);
   }
-  public get usernameLinkHandle(): Uint8Array | null {
+  public get usernameLinkHandle(): Buffer | null {
     return Native.RegisterAccountResponse_GetUsernameLinkHandle(this);
   }
 

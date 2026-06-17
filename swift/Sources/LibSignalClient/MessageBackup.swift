@@ -14,22 +14,11 @@ public class MessageBackupKey: NativeHandleOwner<SignalMutPointerMessageBackupKe
     ///
     /// `accountEntropy` must be a **validated** account entropy pool;
     /// passing an arbitrary String here is considered a programmer error.
-    public convenience init(
-        accountEntropy: String,
-        aci: Aci,
-        forwardSecrecyToken: BackupForwardSecrecyToken? = nil
-    ) throws {
-        let handle = try withAllBorrowed(aci, .fixed(forwardSecrecyToken)) {
-            aci,
-            forwardSecrecyToken in
-            try invokeFnReturningValueByPointer(.init()) {
-                signal_message_backup_key_from_account_entropy_pool(
-                    $0,
-                    accountEntropy,
-                    aci,
-                    forwardSecrecyToken
-                )
-            }
+    public convenience init(accountEntropy: String, aci: Aci) throws {
+        let handle = try aci.withPointerToFixedWidthBinary { aci in
+            var outputHandle = SignalMutPointerMessageBackupKey()
+            try checkError(signal_message_backup_key_from_account_entropy_pool(&outputHandle, accountEntropy, aci))
+            return outputHandle
         }
         self.init(owned: NonNull(handle)!)
     }
@@ -37,23 +26,16 @@ public class MessageBackupKey: NativeHandleOwner<SignalMutPointerMessageBackupKe
     /// Derives a `MessageBackupKey` from the given backup key and ID.
     ///
     /// Used when reading from a local backup, which may have been created with a different ACI.
-    public convenience init(
-        backupKey: BackupKey,
-        backupId: Data,
-        forwardSecrecyToken: BackupForwardSecrecyToken? = nil
-    ) throws {
+    ///
+    /// This uses AccountEntropyPool-based key derivation rules;
+    /// it cannot be used to read a backup created from a master key.
+    public convenience init(backupKey: BackupKey, backupId: [UInt8]) throws {
         let backupId = try ByteArray(newContents: backupId, expectedLength: 16)
-        let handle = try withAllBorrowed(.fixed(backupKey), .fixed(backupId), .fixed(forwardSecrecyToken)) {
-            backupKey,
-            backupId,
-            forwardSecrecyToken in
-            try invokeFnReturningValueByPointer(.init()) {
-                signal_message_backup_key_from_backup_key_and_backup_id(
-                    $0,
-                    backupKey,
-                    backupId,
-                    forwardSecrecyToken
-                )
+        let handle = try backupKey.withUnsafePointerToSerialized { backupKey in
+            try backupId.withUnsafePointerToSerialized { backupId in
+                var outputHandle = SignalMutPointerMessageBackupKey()
+                try checkError(signal_message_backup_key_from_backup_key_and_backup_id(&outputHandle, backupKey, backupId))
+                return outputHandle
             }
         }
         self.init(owned: NonNull(handle)!)
@@ -63,14 +45,12 @@ public class MessageBackupKey: NativeHandleOwner<SignalMutPointerMessageBackupKe
         super.init(owned: handle)
     }
 
-    override internal class func destroyNativeHandle(
-        _ handle: NonNull<SignalMutPointerMessageBackupKey>
-    ) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerMessageBackupKey>) -> SignalFfiErrorRef? {
         signal_message_backup_key_destroy(handle.pointer)
     }
 
     /// An HMAC key used to sign a backup file.
-    public var hmacKey: Data {
+    public var hmacKey: [UInt8] {
         failOnError {
             try withNativeHandle { keyHandle in
                 try invokeFnReturningFixedLengthArray {
@@ -81,7 +61,7 @@ public class MessageBackupKey: NativeHandleOwner<SignalMutPointerMessageBackupKe
     }
 
     /// An AES-256-CBC key used to encrypt a backup file.
-    public var aesKey: Data {
+    public var aesKey: [UInt8] {
         failOnError {
             try withNativeHandle { keyHandle in
                 try invokeFnReturningFixedLengthArray {
@@ -116,8 +96,7 @@ extension SignalConstPointerMessageBackupKey: SignalConstPointer {
 
 public enum MessageBackupPurpose: UInt8, Sendable {
     // This needs to be kept in sync with the Rust version of the enum.
-    case deviceTransfer = 0
-    case remoteBackup = 1
+    case deviceTransfer = 0, remoteBackup = 1
 }
 
 /// Validates a message backup file.
@@ -136,23 +115,13 @@ public enum MessageBackupPurpose: UInt8, Sendable {
 ///
 /// - SeeAlso: ``OnlineBackupValidator``
 public func validateMessageBackup(
-    key: MessageBackupKey,
-    purpose: MessageBackupPurpose,
-    length: UInt64,
-    makeStream: () throws -> SignalInputStream
+    key: MessageBackupKey, purpose: MessageBackupPurpose, length: UInt64, makeStream: () throws -> SignalInputStream
 ) throws -> MessageBackupUnknownFields {
     let outcome: ValidationOutcome = try withInputStream(try makeStream()) { firstInput in
         try withInputStream(try makeStream()) { secondInput in
             try key.withNativeHandle { key in
                 try invokeFnReturningNativeHandle {
-                    signal_message_backup_validator_validate(
-                        $0,
-                        key.const(),
-                        firstInput,
-                        secondInput,
-                        length,
-                        purpose.rawValue
-                    )
+                    signal_message_backup_validator_validate($0, key.const(), firstInput, secondInput, length, purpose.rawValue)
                 }
             }
         }
@@ -190,9 +159,9 @@ public class OnlineBackupValidator: NativeHandleOwner<SignalMutPointerOnlineBack
     /// - Throws: ``MessageBackupValidationError`` on error.
     public convenience init<Bytes: ContiguousBytes>(backupInfo: Bytes, purpose: MessageBackupPurpose) throws {
         let handle = try backupInfo.withUnsafeBorrowedBuffer { backupInfo in
-            try invokeFnReturningValueByPointer(.init()) {
-                signal_online_backup_validator_new($0, backupInfo, purpose.rawValue)
-            }
+            var outputHandle = SignalMutPointerOnlineBackupValidator()
+            try checkError(signal_online_backup_validator_new(&outputHandle, backupInfo, purpose.rawValue))
+            return outputHandle
         }
         self.init(owned: NonNull(handle)!)
     }
@@ -201,9 +170,7 @@ public class OnlineBackupValidator: NativeHandleOwner<SignalMutPointerOnlineBack
         super.init(owned: handle)
     }
 
-    override internal class func destroyNativeHandle(
-        _ handle: NonNull<SignalMutPointerOnlineBackupValidator>
-    ) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerOnlineBackupValidator>) -> SignalFfiErrorRef? {
         signal_online_backup_validator_destroy(handle.pointer)
     }
 
@@ -254,20 +221,11 @@ public struct MessageBackupValidationError: Error {
     public var errorMessage: String
     /// Unknown fields encountered while validating.
     public var unknownFields: MessageBackupUnknownFields
-
-    public init(errorMessage: String, unknownFields: MessageBackupUnknownFields) {
-        self.errorMessage = errorMessage
-        self.unknownFields = unknownFields
-    }
 }
 
 /// Unknown fields encountered while validating.
 public struct MessageBackupUnknownFields: Sendable {
     public let fields: [String]
-
-    public init(fields: [String]) {
-        self.fields = fields
-    }
 }
 
 private class ValidationOutcome: NativeHandleOwner<SignalMutPointerMessageBackupValidationOutcome> {
@@ -290,9 +248,7 @@ private class ValidationOutcome: NativeHandleOwner<SignalMutPointerMessageBackup
         }
     }
 
-    override internal class func destroyNativeHandle(
-        _ handle: NonNull<SignalMutPointerMessageBackupValidationOutcome>
-    ) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerMessageBackupValidationOutcome>) -> SignalFfiErrorRef? {
         signal_message_backup_validation_outcome_destroy(handle.pointer)
     }
 }

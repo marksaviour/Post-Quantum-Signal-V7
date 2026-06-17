@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator as _};
-use zkgroup::SECONDS_PER_DAY;
 use zkgroup::auth::AuthCredentialWithPniZkcResponse;
+use zkgroup::SECONDS_PER_DAY;
 
 fn benchmark_integration_auth(c: &mut Criterion) {
     let server_secret_params = zkgroup::ServerSecretParams::generate(zkgroup::TEST_ARRAY_32);
@@ -276,13 +276,6 @@ pub fn benchmark_group_send_endorsements(c: &mut Criterion) {
 
     let aci = libsignal_core::Aci::from_uuid_bytes(zkgroup::TEST_ARRAY_16);
 
-    // Use cfg!(debug_assertions) as a proxy for "no optimizations".
-    let group_sizes: &[usize] = if cfg!(debug_assertions) {
-        &[50]
-    } else {
-        &[2, 5, 10, 100, 1000]
-    };
-
     let all_members: Vec<libsignal_core::ServiceId> = std::iter::once(aci)
         .chain((1u16..).map(|i| {
             // Generate arbitrary v5 (hash-based) UUIDs for the rest of the group.
@@ -292,7 +285,7 @@ pub fn benchmark_group_send_endorsements(c: &mut Criterion) {
             ))
         }))
         .map(libsignal_core::ServiceId::from)
-        .take(*group_sizes.last().unwrap())
+        .take(1000)
         .collect();
     let all_member_ciphertexts: Vec<_> = all_members
         .iter()
@@ -300,7 +293,7 @@ pub fn benchmark_group_send_endorsements(c: &mut Criterion) {
         .collect();
 
     let mut benchmark_group = c.benchmark_group("group_send_endorsements");
-    for &group_size in group_sizes {
+    for group_size in [2, 5, 10, 100, 1000] {
         let group = &all_members[..group_size];
         let group_ciphertexts = &all_member_ciphertexts[..group_size];
 

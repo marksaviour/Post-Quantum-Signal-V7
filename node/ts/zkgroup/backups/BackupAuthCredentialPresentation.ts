@@ -3,17 +3,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import ByteArray from '../internal/ByteArray.js';
-import * as Native from '../../Native.js';
+import ByteArray from '../internal/ByteArray';
+import * as Native from '../../../Native';
 
-import GenericServerSecretParams from '../GenericServerSecretParams.js';
-import BackupLevel from './BackupLevel.js';
-import BackupCredentialType from './BackupCredentialType.js';
+import GenericServerSecretParams from '../GenericServerSecretParams';
+import BackupLevel from './BackupLevel';
+import BackupCredentialType from './BackupCredentialType';
 
 export default class BackupAuthCredentialPresentation extends ByteArray {
   private readonly __type?: never;
 
-  constructor(contents: Uint8Array) {
+  constructor(contents: Buffer) {
     super(contents, Native.BackupAuthCredentialPresentation_CheckValidContents);
   }
 
@@ -28,7 +28,7 @@ export default class BackupAuthCredentialPresentation extends ByteArray {
     );
   }
 
-  getBackupId(): Uint8Array {
+  getBackupId(): Buffer {
     return Native.BackupAuthCredentialPresentation_GetBackupId(this.contents);
   }
 

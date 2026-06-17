@@ -9,7 +9,7 @@ use serde_with::hex::Hex;
 use serde_with::serde_as;
 
 use crate::backup::time::{ReportUnusualTimestamp, Timestamp, TimestampError};
-use crate::backup::{HasUnknownFields, TryIntoWith, serialize};
+use crate::backup::{serialize, TryIntoWith};
 use crate::proto::backup as proto;
 
 #[derive(Debug, serde::Serialize)]
@@ -80,8 +80,8 @@ pub enum PaymentError {
     InvalidAmount,
     /// "fee" was not parsable
     InvalidFee,
-    /// TransactionDetails.payment is a oneof but has no value, with {0}
-    NoTransactionDetailsPayment(HasUnknownFields),
+    /// TransactionDetails.payment is a oneof but has no value
+    NoTransactionDetailsPayment,
     /// transaction details: {0}
     Transaction(#[from] TransactionError),
 }
@@ -124,15 +124,10 @@ impl<C: ReportUnusualTimestamp> TryIntoWith<PaymentNotification, C> for proto::P
             .map(
                 |proto::payment_notification::TransactionDetails {
                      payment,
-                     special_fields,
+                     special_fields: _,
                  }| {
                     use proto::payment_notification::transaction_details::Payment;
-                    let payment = payment.ok_or_else(|| {
-                        PaymentError::NoTransactionDetailsPayment(HasUnknownFields::check(
-                            &special_fields,
-                        ))
-                    })?;
-                    match payment {
+                    match payment.ok_or(PaymentError::NoTransactionDetailsPayment)? {
                         Payment::Transaction(transaction) => transaction
                             .try_into_with(context)
                             .map(|t| TransactionDetails::Transaction(Box::new(t))),
@@ -230,8 +225,8 @@ impl TryFrom<proto::payment_notification::transaction_details::FailedTransaction
     fn try_from(
         value: proto::payment_notification::transaction_details::FailedTransaction,
     ) -> Result<Self, Self::Error> {
-        use proto::payment_notification::transaction_details::FailedTransaction as FailedTransactionProto;
         use proto::payment_notification::transaction_details::failed_transaction::FailureReason;
+        use proto::payment_notification::transaction_details::FailedTransaction as FailedTransactionProto;
 
         let FailedTransactionProto {
             reason,

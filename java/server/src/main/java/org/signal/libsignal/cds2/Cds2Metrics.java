@@ -25,11 +25,9 @@ public final class Cds2Metrics {
   public static Map<String, Long> extract(final byte[] attestationMessage)
       throws AttestationDataException {
     @SuppressWarnings("unchecked")
-    final var result =
-        (Map<String, Long>)
-            filterExceptions(
-                AttestationDataException.class,
-                () -> Native.Cds2Metrics_extract(attestationMessage));
+    Map<String, Long> result =
+        filterExceptions(
+            AttestationDataException.class, () -> Native.Cds2Metrics_extract(attestationMessage));
     return result;
   }
 }

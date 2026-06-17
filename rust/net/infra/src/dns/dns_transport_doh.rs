@@ -4,11 +4,12 @@
 //
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::sync::Arc;
 
 use bytes::Bytes;
 use const_str::ip_addr;
-use futures_util::Stream;
 use futures_util::stream::FuturesUnordered;
+use futures_util::Stream;
 use http::uri::PathAndQuery;
 use http::{HeaderValue, Method};
 
@@ -19,13 +20,13 @@ use crate::dns::dns_message;
 use crate::dns::dns_message::{parse_a_record, parse_aaaa_record};
 use crate::dns::dns_types::ResourceType;
 use crate::errors::{LogSafeDisplay, TransportConnectError};
-use crate::http_client::{AggregatingHttp2Client, Http2Connector, HttpConnectError};
+use crate::http_client::{AggregatingHttp2Client, Http2Connector};
 use crate::route::{
     Connector, ConnectorExt, ConnectorFactory, HttpsTlsRoute, TcpRoute, ThrottlingConnector,
     TlsRoute, VariableTlsTimeoutConnector,
 };
 use crate::timeouts::MIN_TLS_HANDSHAKE_TIMEOUT;
-use crate::{DnsSource, dns};
+use crate::{dns, DnsSource};
 
 pub(crate) const CLOUDFLARE_IPS: (Ipv4Addr, Ipv6Addr) = (
     ip_addr!(v4, "1.1.1.1"),
@@ -72,24 +73,23 @@ impl Connector<HttpsTlsRoute<TlsRoute<TcpRoute<IpAddr>>>, ()> for DohTransportCo
         &self,
         _over: (),
         route: HttpsTlsRoute<TlsRoute<TcpRoute<IpAddr>>>,
-        log_tag: &str,
+        log_tag: Arc<str>,
     ) -> Result<Self::Connection, Self::Error> {
-        let connector =
-            crate::route::ComposedConnector::new(Http2Connector::new(), &self.transport_connector);
-        let http_client =
-            connector
-                .connect(route, log_tag)
-                .await
-                .map_err(|e: HttpConnectError| {
-                    log::warn!(
-                        "[{log_tag}] Failed to create HTTP2 client for DNS lookup: {}",
-                        &e as &dyn LogSafeDisplay
-                    );
-                    Error::TransportFailure
-                })?;
-        Ok(DohTransport {
-            http_client: AggregatingHttp2Client::new(http_client, MAX_RESPONSE_SIZE),
-        })
+        let connector = Http2Connector {
+            inner: &self.transport_connector,
+            max_response_size: MAX_RESPONSE_SIZE,
+        };
+        let http_client = connector
+            .connect(route, log_tag.clone())
+            .await
+            .map_err(|e| {
+                log::error!(
+                    "[{log_tag}] Failed to create HTTP2 client: {}",
+                    &e as &dyn LogSafeDisplay
+                );
+                Error::TransportFailure
+            })?;
+        Ok(DohTransport { http_client })
     }
 }
 
@@ -120,7 +120,7 @@ impl DnsTransport for DohTransport {
 
 impl DohTransport {
     async fn send_request(
-        mut self,
+        self,
         request: DnsLookupRequest,
         resource_type: ResourceType,
     ) -> dns::Result<DnsQueryResult> {

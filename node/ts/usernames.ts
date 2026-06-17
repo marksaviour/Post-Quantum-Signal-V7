@@ -5,14 +5,11 @@
 
 /* eslint @typescript-eslint/no-shadow: ["error", { "allow": ["hash"] }] */
 
-import { randomBytes } from 'node:crypto';
-import { RANDOM_LENGTH } from './zkgroup/internal/Constants.js';
-import * as Native from './Native.js';
+import { randomBytes } from 'crypto';
+import { RANDOM_LENGTH } from './zkgroup/internal/Constants';
+import * as Native from '../Native';
 
-export type UsernameLink = {
-  entropy: Uint8Array;
-  encryptedUsername: Uint8Array;
-};
+export type UsernameLink = { entropy: Buffer; encryptedUsername: Buffer };
 
 export function generateCandidates(
   nickname: string,
@@ -31,7 +28,7 @@ export function fromParts(
   discriminator: string,
   minNicknameLength: number,
   maxNicknameLength: number
-): { username: string; hash: Uint8Array } {
+): { username: string; hash: Buffer } {
   const hash = Native.Username_HashFromParts(
     nickname,
     discriminator,
@@ -43,19 +40,19 @@ export function fromParts(
   return { username, hash };
 }
 
-export function hash(username: string): Uint8Array {
+export function hash(username: string): Buffer {
   return Native.Username_Hash(username);
 }
 
-export function generateProof(username: string): Uint8Array {
+export function generateProof(username: string): Buffer {
   const random = randomBytes(RANDOM_LENGTH);
   return generateProofWithRandom(username, random);
 }
 
 export function generateProofWithRandom(
   username: string,
-  random: Uint8Array
-): Uint8Array {
+  random: Buffer
+): Buffer {
   return Native.Username_Proof(username, random);
 }
 
@@ -68,18 +65,18 @@ export function decryptUsernameLink(usernameLink: UsernameLink): string {
 
 export function createUsernameLink(
   username: string,
-  previousEntropy?: Uint8Array
+  previousEntropy?: Buffer
 ): UsernameLink {
   const usernameLinkData = Native.UsernameLink_Create(
     username,
     previousEntropy ?? null
   );
-  const entropy = usernameLinkData.subarray(0, 32);
-  const encryptedUsername = usernameLinkData.subarray(32);
+  const entropy = usernameLinkData.slice(0, 32);
+  const encryptedUsername = usernameLinkData.slice(32);
   return { entropy, encryptedUsername };
 }
 
 // Only for testing. Will throw on failure.
-export function verifyProof(proof: Uint8Array, hash: Uint8Array): void {
+export function verifyProof(proof: Buffer, hash: Buffer): void {
   Native.Username_Verify(proof, hash);
 }

@@ -5,10 +5,10 @@
 
 use std::fmt;
 
-use libsignal_core::derive_arrays;
+use arrayref::array_ref;
 
 use crate::proto::storage::session_structure;
-use crate::{PrivateKey, PublicKey, Result, crypto};
+use crate::{crypto, PrivateKey, PublicKey, Result};
 
 pub(crate) enum MessageKeyGenerator {
     Keys(MessageKeys),
@@ -19,17 +19,10 @@ impl MessageKeyGenerator {
     pub(crate) fn new_from_seed(seed: &[u8], counter: u32) -> Self {
         Self::Seed((seed.to_vec(), counter))
     }
-    pub(crate) fn generate_keys(self, pqr_key: spqr::MessageKey) -> MessageKeys {
+    pub(crate) fn generate_keys(self) -> MessageKeys {
         match self {
-            Self::Seed((seed, counter)) => {
-                MessageKeys::derive_keys(&seed, pqr_key.as_deref(), counter)
-            }
-            Self::Keys(k) => {
-                // PQR keys should only be set for newer sessions, and in
-                // newer sessions there should be only seed-based generators.
-                assert!(pqr_key.is_none());
-                k
-            }
+            Self::Seed((seed, counter)) => MessageKeys::derive_keys(&seed, counter),
+            Self::Keys(k) => k,
         }
     }
     pub(crate) fn into_pb(self) -> session_structure::chain::MessageKey {
@@ -87,21 +80,16 @@ pub(crate) struct MessageKeys {
 }
 
 impl MessageKeys {
-    pub(crate) fn derive_keys(
-        input_key_material: &[u8],
-        optional_salt: Option<&[u8]>,
-        counter: u32,
-    ) -> Self {
-        let (cipher_key, mac_key, iv) = derive_arrays(|okm| {
-            hkdf::Hkdf::<sha2::Sha256>::new(optional_salt, input_key_material)
-                .expand(b"WhisperMessageKeys", okm)
-                .expect("valid output length")
-        });
+    pub(crate) fn derive_keys(input_key_material: &[u8], counter: u32) -> Self {
+        let mut okm = [0; 80];
+        hkdf::Hkdf::<sha2::Sha256>::new(None, input_key_material)
+            .expand(b"WhisperMessageKeys", &mut okm)
+            .expect("valid output length");
 
         MessageKeys {
-            cipher_key,
-            mac_key,
-            iv,
+            cipher_key: *array_ref![okm, 0, 32],
+            mac_key: *array_ref![okm, 32, 32],
+            iv: *array_ref![okm, 64, 16],
             counter,
         }
     }
@@ -190,16 +178,17 @@ impl RootKey {
         our_ratchet_key: &PrivateKey,
     ) -> Result<(RootKey, ChainKey)> {
         let shared_secret = our_ratchet_key.calculate_agreement(their_ratchet_key)?;
-        let (root_key, chain_key, []) = derive_arrays(|bytes| {
-            hkdf::Hkdf::<sha2::Sha256>::new(Some(&self.key), &shared_secret)
-                .expand(b"WhisperRatchet", bytes)
-                .expect("valid output length")
-        });
+        let mut derived_secret_bytes = [0; 64];
+        hkdf::Hkdf::<sha2::Sha256>::new(Some(&self.key), &shared_secret)
+            .expand(b"WhisperRatchet", &mut derived_secret_bytes)
+            .expect("valid output length");
 
         Ok((
-            RootKey { key: root_key },
+            RootKey {
+                key: *array_ref![derived_secret_bytes, 0, 32],
+            },
             ChainKey {
-                key: chain_key,
+                key: *array_ref![derived_secret_bytes, 32, 32],
                 index: 0,
             },
         ))
@@ -243,22 +232,19 @@ mod tests {
         assert_eq!(&seed, chain_key.key());
         assert_eq!(
             &message_key,
-            chain_key.message_keys().generate_keys(None).cipher_key()
+            chain_key.message_keys().generate_keys().cipher_key()
         );
-        assert_eq!(
-            &mac_key,
-            chain_key.message_keys().generate_keys(None).mac_key()
-        );
+        assert_eq!(&mac_key, chain_key.message_keys().generate_keys().mac_key());
         assert_eq!(&next_chain_key, chain_key.next_chain_key().key());
         assert_eq!(0, chain_key.index());
-        assert_eq!(0, chain_key.message_keys().generate_keys(None).counter());
+        assert_eq!(0, chain_key.message_keys().generate_keys().counter());
         assert_eq!(1, chain_key.next_chain_key().index());
         assert_eq!(
             1,
             chain_key
                 .next_chain_key()
                 .message_keys()
-                .generate_keys(None)
+                .generate_keys()
                 .counter()
         );
         Ok(())

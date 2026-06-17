@@ -101,18 +101,6 @@ pub fn generate_frames(
             hasSeenGroupStoryEducationSheet: true,
             hasCompletedUsernameOnboarding: true,
             phoneNumberSharingMode: proto::account_data::PhoneNumberSharingMode::EVERYBODY.into(),
-            defaultSentMediaQuality: proto::account_data::SentMediaQuality::STANDARD.into(),
-            appTheme: proto::account_data::AppTheme::SYSTEM.into(),
-            callsUseLessDataSetting: proto::account_data::CallsUseLessDataSetting::MOBILE_DATA_ONLY
-                .into(),
-            ..Default::default()
-        })
-        .into(),
-        androidSpecificSettings: Some(proto::account_data::AndroidSpecificSettings {
-            useSystemEmoji: true,
-            screenshotSecurity: true,
-            navigationBarSize:
-                proto::account_data::android_specific_settings::NavigationBarSize::COMPACT.into(),
             ..Default::default()
         })
         .into(),

@@ -1,49 +1,62 @@
-import org.gradle.api.publish.PublishingExtension
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 plugins {
     id "base"
     id "signing"
-    id "com.diffplug.spotless" version "7.2.1"
-
-    id "org.jetbrains.kotlin.jvm" version "2.2.20" apply false
-    id "org.jetbrains.dokka" version "2.1.0" apply false
-    id "org.jetbrains.dokka-javadoc" version "2.1.0" apply false
-
-    // These plugins need to be loaded together, so we must declare them up front.
-    id 'com.android.library' version "8.13.2" apply false
-    id 'org.jetbrains.kotlin.android' version "2.2.20" apply false
-}
-
-repositories {
-    mavenCentral()
-    google()
-    mavenLocal()
+    id "com.diffplug.spotless" version "6.20.0"
+    id "io.github.gradle-nexus.publish-plugin" version "2.0.0"
+    id "org.jetbrains.kotlin.jvm" version "2.1.0"
 }
 
 allprojects {
-    version = "0.87.5"
+    version = "0.73.3"
     group   = "org.signal"
 
-    tasks.withType(JavaCompile) {
-        options.encoding = 'UTF-8'
-        options.compilerArgs += ["-Xlint:deprecation", "-Xlint:fallthrough", "-Xlint:unchecked"]
-    }
-    tasks.withType(Javadoc) {
-        options.encoding = 'UTF-8'
-        options.addStringOption('Xdoclint:none', '-quiet')
-    }
     tasks.withType(KotlinCompile).configureEach {
         compilerOptions.jvmTarget = JvmTarget.JVM_17
     }
-    tasks.withType(AbstractArchiveTask) {
-        preserveFileTimestamps = false
-        reproducibleFileOrder = true
+}
+
+subprojects {
+    if (JavaVersion.current().isJava8Compatible()) {
+        allprojects {
+            tasks.withType(Javadoc) {
+                options.encoding = 'UTF-8'
+                options.addStringOption('Xdoclint:none', '-quiet')
+            }
+        }
     }
 
-    apply plugin: "org.jetbrains.dokka"
-    apply plugin: "org.jetbrains.dokka-javadoc"
+    allprojects {
+        tasks.withType(JavaCompile) {
+            options.encoding = 'UTF-8'
+            options.compilerArgs += ["-Xlint:deprecation", "-Xlint:fallthrough", "-Xlint:unchecked"]
+        }
+        tasks.withType(AbstractArchiveTask) {
+            preserveFileTimestamps = false
+            reproducibleFileOrder = true
+        }
+    }
+
+    apply plugin: "com.diffplug.spotless"
+    spotless {
+        kotlin {
+            target('**/*.kt')
+            targetExclude("**/acknowledgments/**")
+            ktlint()
+        }
+        java {
+            target('**/*.java')
+            targetExclude('**/Native.java', '**/NativeTesting.java')
+            importOrder()
+            removeUnusedImports()
+
+            googleJavaFormat()
+            formatAnnotations()
+            licenseHeaderFile rootProject.file('license_header.txt')
+        }
+    }
 }
 
 task makeJniLibrariesDesktop(type:Exec) {
@@ -106,58 +119,15 @@ ext.setUpSigningKey = { signingExt ->
     }
 }
 
-subprojects { subproject ->
-    subproject.plugins.withId('maven-publish') {
-        subproject.extensions.configure(PublishingExtension) { publishing ->
-            publishing.repositories {
-                maven {
-                    name = "SignalBuildArtifacts"
-                    // We can't use Gradle's built-in GCS support with the way we authenticate
-                    // GitHub Actions. Fortunately, GCS's REST APIs are basically just normal HTTP
-                    // GET/PUT with an auth token, which is compatible with what Gradle will do.
-                    url = subproject.uri("https://storage.googleapis.com/build-artifacts.signal.org/libraries/maven")
-                    credentials(HttpHeaderCredentials) {
-                        name = "Authorization"
-                        value = "Bearer ${System.getenv("CLOUDSDK_AUTH_ACCESS_TOKEN") ?: ""}"
-                    }
-                    authentication {
-                        header(HttpHeaderAuthentication)
-                    }
-                }
-            }
+nexusPublishing {
+    repositories {
+        sonatype {
+            username = project.findProperty('sonatypeUsername') ?: ""
+            password = project.findProperty('sonatypePassword') ?: ""
         }
     }
 }
 
 def isReleaseBuild() {
     return version.contains("SNAPSHOT") == false
-}
-
-// Late evaluation after this point.
-
-evaluationDependsOnChildren()
-
-spotless {
-    kotlin {
-        target allprojects.collectMany {
-            return it.tasks.withType(KotlinCompile)
-        }.inject(files()) { collected, next ->
-            collected + next.sources
-        }
-        targetExclude('**/Native.kt', '**/NativeTesting.kt', '**/org/rustls/**')
-        ktlint()
-    }
-    java {
-        target allprojects.collectMany {
-            return it.tasks.withType(JavaCompile)
-        }.inject(files()) { collected, next ->
-            collected + next.source
-        }
-        importOrder()
-        removeUnusedImports()
-
-        googleJavaFormat()
-        formatAnnotations()
-        licenseHeaderFile rootProject.file('license_header.txt')
-    }
 }

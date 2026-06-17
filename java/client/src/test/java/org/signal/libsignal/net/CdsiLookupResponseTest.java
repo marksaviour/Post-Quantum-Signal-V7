@@ -57,12 +57,15 @@ public class CdsiLookupResponseTest {
   public void cdsiLookupErrorConvert() {
     assertLookupErrorIs(
         "Protocol", CdsiProtocolException.class, "Protocol error after establishing a connection");
-    assertLookupErrorIs(
-        "CdsiProtocol", CdsiProtocolException.class, "CDS protocol: no token found in response");
+    assertLookupErrorIs("CdsiProtocol", CdsiProtocolException.class, "Response token was missing");
     assertLookupErrorIs(
         "AttestationDataError",
         AttestationDataException.class,
         "attestation data invalid: fake reason");
+    assertLookupErrorIs(
+        "InvalidResponse",
+        CdsiProtocolException.class,
+        "Invalid response received from the server");
     RetryLaterException retryLater =
         assertLookupErrorIs(
             "RetryAfter42Seconds", RetryLaterException.class, "Retry after 42 seconds");
@@ -71,17 +74,15 @@ public class CdsiLookupResponseTest {
     assertLookupErrorIs(
         "InvalidToken", CdsiInvalidTokenException.class, "Request token was invalid");
     assertLookupErrorIs(
-        "InvalidArgument", IllegalArgumentException.class, "request was invalid: fake reason");
+        "InvalidArgument",
+        IllegalArgumentException.class,
+        "invalid argument: request was invalid: fake reason");
     assertLookupErrorIs(
-        "TcpConnectFailed",
-        IOException.class,
-        "Failed to establish TCP connection to any of the IPs");
+        "Parse", CdsiProtocolException.class, "Failed to parse the response from the server");
+    assertLookupErrorIs("ConnectDnsFailed", IOException.class, "DNS lookup failed");
     assertLookupErrorIs(
         "WebSocketIdleTooLong", NetworkException.class, "channel was idle for too long");
-    assertLookupErrorIs(
-        "AllConnectionAttemptsFailed",
-        NetworkException.class,
-        "no connection attempts succeeded before timeout");
+    assertLookupErrorIs("ConnectionTimedOut", NetworkException.class, "connect timed out");
     assertLookupErrorIs("ServerCrashed", CdsiProtocolException.class, "Server error: crashed");
   }
 
@@ -92,7 +93,7 @@ public class CdsiLookupResponseTest {
             "for " + errorDescription,
             expectedErrorType,
             () -> NativeTesting.TESTING_CdsiLookupErrorConvert(errorDescription));
-    assertEquals(expectedMessage, e.getMessage());
+    assertEquals(e.getMessage(), expectedMessage);
     return e;
   }
 }

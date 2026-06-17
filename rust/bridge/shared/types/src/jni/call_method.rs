@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-use jni::JNIEnv;
 use jni::objects::{JClass, JMethodID, JObject, JStaticMethodID, JValueOwned};
+use jni::JNIEnv;
 
 use crate::jni::{BridgeLayerError, HandleJniError as _, JniArgs};
 
@@ -92,9 +92,7 @@ where
     // Note that we are *not* unwrapping the result yet!
     // We need to check for exceptions *first*.
     #[allow(clippy::disallowed_methods)]
-    unsafe {
-        env.call_static_method_unchecked(cls.as_ref(), method_id.as_ref(), ret, args)
-    }
+    env.call_static_method_unchecked(cls.as_ref(), method_id.as_ref(), ret, args)
 }
 
 /// Constructs a new object using [`JniArgs`].
@@ -130,9 +128,7 @@ where
     }
 
     #[allow(clippy::disallowed_methods)]
-    unsafe {
-        env.new_object_unchecked(cls.as_ref(), ctor_id, ctor_args)
-    }
+    env.new_object_unchecked(cls.as_ref(), ctor_id, ctor_args)
 }
 
 fn check_exceptions_and_convert_result<'output, R: TryFrom<JValueOwned<'output>>>(
@@ -148,9 +144,9 @@ fn check_exceptions_and_convert_result<'output, R: TryFrom<JValueOwned<'output>>
 }
 
 mod check_annotations {
-    use jni::JNIEnv;
     use jni::errors::Result;
     use jni::objects::{AutoLocal, JClass, JMethodID, JObject, JStaticMethodID};
+    use jni::JNIEnv;
 
     use super::jni_ext::JNIEnvExt as _;
     use crate::jni::{ClassName, JniArgs};
@@ -257,10 +253,10 @@ mod check_annotations {
 }
 
 mod jni_ext {
-    use jni::JNIEnv;
     use jni::errors::Result;
     use jni::objects::{JClass, JMethodID, JObject, JStaticMethodID};
     use jni::sys::{JNI_FALSE, JNI_TRUE};
+    use jni::JNIEnv;
 
     // TODO once https://github.com/jni-rs/jni-rs/pull/579 is merged and in a
     // release, use the methods added there and remove this implementation.

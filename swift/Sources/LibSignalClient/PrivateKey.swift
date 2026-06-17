@@ -8,10 +8,10 @@ import SignalFfi
 
 public class PrivateKey: ClonableHandleOwner<SignalMutPointerPrivateKey>, @unchecked Sendable {
     public convenience init<Bytes: ContiguousBytes>(_ bytes: Bytes) throws {
-        let handle = try bytes.withUnsafeBorrowedBuffer { bytes in
-            try invokeFnReturningValueByPointer(.init()) {
-                signal_privatekey_deserialize($0, bytes)
-            }
+        let handle = try bytes.withUnsafeBorrowedBuffer {
+            var result = SignalMutPointerPrivateKey()
+            try checkError(signal_privatekey_deserialize(&result, $0))
+            return result
         }
         self.init(owned: NonNull(handle)!)
     }
@@ -24,34 +24,29 @@ public class PrivateKey: ClonableHandleOwner<SignalMutPointerPrivateKey>, @unche
         }
     }
 
-    override internal class func cloneNativeHandle(
-        _ newHandle: inout SignalMutPointerPrivateKey,
-        currentHandle: SignalConstPointerPrivateKey
-    ) -> SignalFfiErrorRef? {
+    override internal class func cloneNativeHandle(_ newHandle: inout SignalMutPointerPrivateKey, currentHandle: SignalConstPointerPrivateKey) -> SignalFfiErrorRef? {
         return signal_privatekey_clone(&newHandle, currentHandle)
     }
 
-    override internal class func destroyNativeHandle(
-        _ handle: NonNull<SignalMutPointerPrivateKey>
-    ) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerPrivateKey>) -> SignalFfiErrorRef? {
         return signal_privatekey_destroy(handle.pointer)
     }
 
-    public func serialize() -> Data {
+    public func serialize() -> [UInt8] {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningData {
+                try invokeFnReturningArray {
                     signal_privatekey_serialize($0, nativeHandle.const())
                 }
             }
         }
     }
 
-    public func generateSignature<Bytes: ContiguousBytes>(message: Bytes) -> Data {
+    public func generateSignature<Bytes: ContiguousBytes>(message: Bytes) -> [UInt8] {
         return withNativeHandle { nativeHandle in
             message.withUnsafeBorrowedBuffer { messageBuffer in
                 failOnError {
-                    try invokeFnReturningData {
+                    try invokeFnReturningArray {
                         signal_privatekey_sign($0, nativeHandle.const(), messageBuffer)
                     }
                 }
@@ -59,48 +54,13 @@ public class PrivateKey: ClonableHandleOwner<SignalMutPointerPrivateKey>, @unche
         }
     }
 
-    public func keyAgreement(with other: PublicKey) -> Data {
-        return failOnError {
-            try withAllBorrowed(self, other) { nativeHandle, otherHandle in
-                try invokeFnReturningData {
+    public func keyAgreement(with other: PublicKey) -> [UInt8] {
+        return withNativeHandles(self, other) { nativeHandle, otherHandle in
+            failOnError {
+                try invokeFnReturningArray {
                     signal_privatekey_agree($0, nativeHandle.const(), otherHandle.const())
                 }
             }
-        }
-    }
-
-    /// Opens a ciphertext sealed with ``PublicKey/seal(_:info:associatedData:)-(_,ContiguousBytes,_)``.
-    ///
-    /// Uses HPKE ([RFC 9180][]). The input should include its original type byte indicating the
-    /// chosen algorithms and ciphertext layout. The `info` and `associatedData` must match those
-    /// used during sealing.
-    ///
-    /// [RFC 9180]: https://www.rfc-editor.org/rfc/rfc9180.html
-    public func open(
-        _ ciphertext: some ContiguousBytes,
-        info: some ContiguousBytes,
-        associatedData: some ContiguousBytes = []
-    ) throws -> Data {
-        try withAllBorrowed(self, .bytes(ciphertext), .bytes(info), .bytes(associatedData)) {
-            nativeHandle,
-            ciphertextBuffer,
-            infoBuffer,
-            aadBuffer in
-            try invokeFnReturningData {
-                signal_privatekey_hpke_open($0, nativeHandle.const(), ciphertextBuffer, infoBuffer, aadBuffer)
-            }
-        }
-    }
-
-    /// Convenience overload for ``open(_:info:associatedData:)-(_,ContiguousBytes,_)``, using the UTF-8 bytes of `info`.
-    public func open(
-        _ ciphertext: some ContiguousBytes,
-        info: String,
-        associatedData: some ContiguousBytes = []
-    ) throws -> Data {
-        var info = info
-        return try info.withUTF8 {
-            try open(ciphertext, info: $0, associatedData: associatedData)
         }
     }
 

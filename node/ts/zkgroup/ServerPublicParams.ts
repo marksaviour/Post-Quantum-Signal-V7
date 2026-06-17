@@ -3,14 +3,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import * as Native from '../Native.js';
-import NotarySignature from './NotarySignature.js';
+import * as Native from '../../Native';
+import NotarySignature from './NotarySignature';
 
 export default class ServerPublicParams {
   readonly _nativeHandle: Native.ServerPublicParams;
 
-  constructor(contents: Uint8Array | Native.ServerPublicParams) {
-    if (contents instanceof Uint8Array) {
+  constructor(contents: Buffer | Native.ServerPublicParams) {
+    if (contents instanceof Buffer) {
       this._nativeHandle = Native.ServerPublicParams_Deserialize(contents);
     } else {
       this._nativeHandle = contents;
@@ -22,11 +22,11 @@ export default class ServerPublicParams {
    *
    * Allows decoupling RingRTC's use of endorsements from libsignal's.
    */
-  getEndorsementPublicKey(): Uint8Array {
+  getEndorsementPublicKey(): Buffer {
     return Native.ServerPublicParams_GetEndorsementPublicKey(this);
   }
 
-  verifySignature(message: Uint8Array, notarySignature: NotarySignature): void {
+  verifySignature(message: Buffer, notarySignature: NotarySignature): void {
     Native.ServerPublicParams_VerifySignature(
       this,
       message,
@@ -34,7 +34,7 @@ export default class ServerPublicParams {
     );
   }
 
-  serialize(): Uint8Array {
+  serialize(): Buffer {
     return Native.ServerPublicParams_Serialize(this);
   }
 }

@@ -5,10 +5,10 @@
 
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
 
 use libsignal_protocol::{ServiceId, ServiceIdFixedWidthBinaryBytes};
 use rayon::iter::ParallelIterator as _;
+use rayon::slice::ParallelSlice as _;
 
 use crate::*;
 
@@ -38,8 +38,11 @@ impl<'a> ServiceIdSequence<'a> {
         Self(input)
     }
 
-    fn parse_single_chunk(chunk: &ServiceIdFixedWidthBinaryBytes) -> ServiceId {
-        ServiceId::parse_from_service_id_fixed_width_binary(chunk).expect(concat!(
+    fn parse_single_chunk(chunk: &[u8]) -> ServiceId {
+        ServiceId::parse_from_service_id_fixed_width_binary(
+            chunk.try_into().expect("correctly split"),
+        )
+        .expect(concat!(
             "input should be a concatenated list of Service-Id-FixedWidthBinary, ",
             "but one ServiceId was invalid"
         ))
@@ -47,48 +50,42 @@ impl<'a> ServiceIdSequence<'a> {
 }
 
 impl<'a> IntoIterator for ServiceIdSequence<'a> {
-    type IntoIter = std::iter::Map<
-        std::slice::Iter<'a, [u8; 17]>,
-        for<'b> fn(&'b ServiceIdFixedWidthBinaryBytes) -> ServiceId,
-    >;
+    type IntoIter = std::iter::Map<std::slice::ChunksExact<'a, u8>, fn(&[u8]) -> ServiceId>;
     type Item = ServiceId;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.as_chunks().0.iter().map(Self::parse_single_chunk)
+        self.0
+            .chunks_exact(Self::SERVICE_ID_FIXED_WIDTH_BINARY_LEN)
+            .map(Self::parse_single_chunk)
     }
 }
 
 impl<'a> rayon::iter::IntoParallelIterator for ServiceIdSequence<'a> {
-    type Iter = rayon::iter::Map<
-        rayon::slice::Iter<'a, ServiceIdFixedWidthBinaryBytes>,
-        for<'b> fn(&'b ServiceIdFixedWidthBinaryBytes) -> ServiceId,
-    >;
+    type Iter = rayon::iter::Map<rayon::slice::ChunksExact<'a, u8>, fn(&[u8]) -> ServiceId>;
     type Item = ServiceId;
 
     fn into_par_iter(self) -> Self::Iter {
         self.0
-            .as_chunks()
-            .0
-            .into_par_iter()
+            .par_chunks_exact(Self::SERVICE_ID_FIXED_WIDTH_BINARY_LEN)
             .map(Self::parse_single_chunk)
     }
 }
 
 #[derive(Default, Debug, PartialEq, Eq, Clone)]
-pub struct BridgedStringMap(HashMap<String, Arc<str>>);
+pub struct BridgedStringMap(HashMap<String, String>);
 
 impl BridgedStringMap {
     pub fn with_capacity(capacity: usize) -> Self {
         Self(HashMap::with_capacity(capacity))
     }
 
-    pub fn take(&mut self) -> HashMap<String, Arc<str>> {
+    pub fn take(&mut self) -> HashMap<String, String> {
         std::mem::take(&mut self.0)
     }
 }
 
 impl Deref for BridgedStringMap {
-    type Target = HashMap<String, Arc<str>>;
+    type Target = HashMap<String, String>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -99,7 +96,7 @@ impl DerefMut for BridgedStringMap {
         &mut self.0
     }
 }
-impl From<BridgedStringMap> for HashMap<String, Arc<str>> {
+impl From<BridgedStringMap> for HashMap<String, String> {
     fn from(value: BridgedStringMap) -> Self {
         value.0
     }

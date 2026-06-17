@@ -60,8 +60,3 @@
 
 # Keep rustls-platform-verifier classes
 -keep, includedescriptorclasses class org.rustls.platformverifier.** { *; }
-
-# Keep kotlin.Pair's constructor
--keep class kotlin.Pair {
-    <init>(...);
-}

@@ -31,13 +31,13 @@
  * @module Mp4Sanitizer
  */
 
-import * as Native from './Native.js';
+import * as Native from '../Native';
 import {
   IoError,
   InvalidMediaInputError,
   UnsupportedMediaInputError,
-} from './Errors.js';
-import { InputStream } from './io.js';
+} from './Errors';
+import { InputStream } from './io';
 
 export class SanitizedMetadata {
   readonly _nativeHandle: Native.SanitizedMetadata;
@@ -56,7 +56,7 @@ export class SanitizedMetadata {
    * Get the sanitized metadata, if any.
    * @returns The sanitized metadata, or `null` if it didn't need to be sanitized.
    */
-  getMetadata(): Uint8Array | null {
+  getMetadata(): Buffer | null {
     const metadata = Native.SanitizedMetadata_GetMetadata(this);
     if (metadata.length == 0) {
       return null;

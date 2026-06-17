@@ -6,8 +6,6 @@
 import LibSignalClient
 import XCTest
 
-#if !os(iOS) || targetEnvironment(simulator)
-
 class SgxTests: TestCaseBase {
     enum ServiceType {
         case svr2, cds2
@@ -20,46 +18,29 @@ class SgxTests: TestCaseBase {
             readResource(forName: "cds2handshakestart.data"),
             Date(timeIntervalSince1970: 1_655_857_680)
         ),
+
         (
             ServiceType.svr2,
-            [UInt8](fromHexString: "97f151f6ed078edbbfd72fa9cae694dcc08353f1f5e8d9ccd79a971b10ffc535")!,
+            [UInt8](fromHexString: "38e01eff4fe357dc0b0e8ef7a44b4abc5489fbccba3a78780f3872c277f62bf3")!,
             readResource(forName: "svr2handshakestart.data"),
-            Date(timeIntervalSince1970: 1_768_516_141)
+            Date(timeIntervalSince1970: 1_741_649_483)
         ),
     ]
 
-    static func build(
-        serviceType: ServiceType,
-        mrenclave: [UInt8],
-        attestationMessage: Data,
-        currentDate: Date
-    ) throws -> SgxClient {
+    static func build(serviceType: ServiceType, mrenclave: [UInt8], attestationMessage: Data, currentDate: Date) throws -> SgxClient {
         switch serviceType {
         case .cds2:
-            return try Cds2Client(
-                mrenclave: mrenclave,
-                attestationMessage: attestationMessage,
-                currentDate: currentDate
-            )
+            return try Cds2Client(mrenclave: mrenclave, attestationMessage: attestationMessage, currentDate: currentDate)
         case .svr2:
-            return try Svr2Client(
-                mrenclave: mrenclave,
-                attestationMessage: attestationMessage,
-                currentDate: currentDate
-            )
+            return try Svr2Client(mrenclave: mrenclave, attestationMessage: attestationMessage, currentDate: currentDate)
         }
     }
 
     func testCreateClient() {
         for (serviceType, mrenclave, attestationMessage, currentDate) in self.testCases {
-            let client = try! SgxTests.build(
-                serviceType: serviceType,
-                mrenclave: mrenclave,
-                attestationMessage: attestationMessage,
-                currentDate: currentDate
-            )
+            let client = try! SgxTests.build(serviceType: serviceType, mrenclave: mrenclave, attestationMessage: attestationMessage, currentDate: currentDate)
             let initialMessage = client.initialRequest()
-            XCTAssertEqual(1632, initialMessage.count, String(describing: serviceType))
+            XCTAssertEqual(serviceType == .svr2 ? 48 : 1632, initialMessage.count, String(describing: serviceType))
         }
     }
 
@@ -72,8 +53,7 @@ class SgxTests: TestCaseBase {
                     mrenclave: invalidMrenclave,
                     attestationMessage: attestationMessage,
                     currentDate: currentDate
-                ),
-                String(describing: serviceType)
+                ), String(describing: serviceType)
             )
         }
     }
@@ -87,8 +67,7 @@ class SgxTests: TestCaseBase {
                     mrenclave: mrenclave,
                     attestationMessage: invalidMessage,
                     currentDate: currentDate
-                ),
-                String(describing: serviceType)
+                ), String(describing: serviceType)
             )
         }
     }
@@ -119,5 +98,3 @@ class SgxTests: TestCaseBase {
         }
     }
 }
-
-#endif

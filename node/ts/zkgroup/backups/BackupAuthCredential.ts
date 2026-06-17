@@ -3,21 +3,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import { randomBytes } from 'node:crypto';
+import { randomBytes } from 'crypto';
 
-import * as Native from '../../Native.js';
-import ByteArray from '../internal/ByteArray.js';
-import { RANDOM_LENGTH } from '../internal/Constants.js';
+import * as Native from '../../../Native';
+import ByteArray from '../internal/ByteArray';
+import { RANDOM_LENGTH } from '../internal/Constants';
 
-import GenericServerPublicParams from '../GenericServerPublicParams.js';
-import BackupAuthCredentialPresentation from './BackupAuthCredentialPresentation.js';
-import BackupLevel from './BackupLevel.js';
-import BackupCredentialType from './BackupCredentialType.js';
+import GenericServerPublicParams from '../GenericServerPublicParams';
+import BackupAuthCredentialPresentation from './BackupAuthCredentialPresentation';
+import BackupLevel from './BackupLevel';
+import BackupCredentialType from './BackupCredentialType';
 
 export default class BackupAuthCredential extends ByteArray {
   private readonly __type?: never;
 
-  constructor(contents: Uint8Array) {
+  constructor(contents: Buffer) {
     super(contents, Native.BackupAuthCredential_CheckValidContents);
   }
 
@@ -30,7 +30,7 @@ export default class BackupAuthCredential extends ByteArray {
 
   presentWithRandom(
     serverParams: GenericServerPublicParams,
-    random: Uint8Array
+    random: Buffer
   ): BackupAuthCredentialPresentation {
     return new BackupAuthCredentialPresentation(
       Native.BackupAuthCredential_PresentDeterministic(
@@ -41,7 +41,7 @@ export default class BackupAuthCredential extends ByteArray {
     );
   }
 
-  getBackupId(): Uint8Array {
+  getBackupId(): Buffer {
     return Native.BackupAuthCredential_GetBackupId(this.contents);
   }
 

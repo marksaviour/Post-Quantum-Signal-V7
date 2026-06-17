@@ -7,8 +7,8 @@ use std::sync::{Arc, LazyLock};
 
 use super::recipient::MinimalRecipientData;
 use crate::backup::call::CallLink;
-use crate::backup::chat::PinOrder;
 use crate::backup::chat::chat_style::{CustomChatColor, CustomColorId};
+use crate::backup::chat::PinOrder;
 use crate::backup::frame::RecipientId;
 use crate::backup::method::{Lookup, LookupPair};
 use crate::backup::recipient::group::GroupData;
@@ -66,7 +66,6 @@ static E164_ONLY_RECIPIENT: LazyLock<FullRecipientData> = LazyLock::new(|| {
         system_nickname: "".to_owned(),
         avatar_color: None,
         note: "".into(),
-        key_transparency_data: None,
     }))
 });
 static PNI_ONLY_RECIPIENT: LazyLock<FullRecipientData> = LazyLock::new(|| {
@@ -93,7 +92,6 @@ static PNI_ONLY_RECIPIENT: LazyLock<FullRecipientData> = LazyLock::new(|| {
         nickname: None,
         avatar_color: None,
         note: "".into(),
-        key_transparency_data: None,
     }))
 });
 static GROUP_RECIPIENT: LazyLock<FullRecipientData> =

@@ -9,7 +9,8 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use either::Either;
-use futures_util::FutureExt as _;
+use futures_util::stream::FuturesUnordered;
+use futures_util::{FutureExt as _, TryStreamExt as _};
 use itertools::Itertools;
 
 use crate::dns::lookup_result::LookupResult;
@@ -96,7 +97,9 @@ pub async fn resolve_route<R: ResolveHostnames + Clone + 'static>(
         })
     });
 
-    let resolved = futures_util::future::try_join_all(to_resolve).await?;
+    let resolved = FuturesUnordered::from_iter(to_resolve)
+        .try_collect::<Vec<_>>()
+        .await?;
 
     let resolutions = resolved
         .into_iter()
@@ -208,7 +211,7 @@ macro_rules! impl_resolve_hostnames {
     }
 }
 
-impl_resolve_hostnames!(TcpRoute, address, port, override_nagle_algorithm);
+impl_resolve_hostnames!(TcpRoute, address, port);
 impl_resolve_hostnames!(TlsRoute, inner, fragment);
 impl_resolve_hostnames!(HttpsTlsRoute, inner, fragment);
 impl_resolve_hostnames!(WebSocketRoute, inner, fragment);
@@ -237,13 +240,7 @@ impl<A: ResolveHostnames> ResolveHostnames for ConnectionProxyRoute<A> {
 
     fn hostnames(&self) -> impl Iterator<Item = &UnresolvedHost> {
         match self {
-            Self::Tls { proxy } => {
-                let hostnames = Either::Left(proxy.hostnames());
-                #[cfg(feature = "dev-util")]
-                let hostnames = Either::Left(hostnames);
-                hostnames
-            }
-            #[cfg(feature = "dev-util")]
+            Self::Tls { proxy } => Either::Left(Either::Left(proxy.hostnames())),
             Self::Tcp { proxy } => Either::Left(Either::Right(proxy.hostnames())),
             Self::Socks(socks) => Either::Right(Either::Right(socks.hostnames())),
             Self::Https(http) => Either::Right(Either::Left(http.hostnames())),
@@ -255,7 +252,6 @@ impl<A: ResolveHostnames> ResolveHostnames for ConnectionProxyRoute<A> {
             ConnectionProxyRoute::Tls { proxy } => ConnectionProxyRoute::Tls {
                 proxy: proxy.resolve(lookup),
             },
-            #[cfg(feature = "dev-util")]
             ConnectionProxyRoute::Tcp { proxy } => ConnectionProxyRoute::Tcp {
                 proxy: proxy.resolve(lookup),
             },
@@ -403,7 +399,6 @@ impl<A: ResolvedRoute> ResolvedRoute for ConnectionProxyRoute<A> {
     fn immediate_target(&self) -> &IpAddr {
         match self {
             ConnectionProxyRoute::Tls { proxy } => proxy.immediate_target(),
-            #[cfg(feature = "dev-util")]
             ConnectionProxyRoute::Tcp { proxy } => proxy.immediate_target(),
             ConnectionProxyRoute::Socks(proxy) => proxy.immediate_target(),
             ConnectionProxyRoute::Https(proxy) => proxy.immediate_target(),
@@ -500,11 +495,10 @@ mod test {
 
     use assert_matches::assert_matches;
     use const_str::ip_addr;
-    use futures_util::{FutureExt as _, StreamExt as _, pin_mut};
+    use futures_util::{pin_mut, FutureExt as _, StreamExt as _};
     use nonzero_ext::nonzero;
 
     use super::*;
-    use crate::OverrideNagleAlgorithm;
     use crate::certs::RootCertificates;
     use crate::host::Host;
     use crate::route::resolve::testutils::{FakeResolver, FakeResponder};
@@ -513,6 +507,7 @@ mod test {
         UnresolvedHttpsServiceRoute,
     };
     use crate::tcp_ssl::proxy::socks;
+    use crate::DnsSource;
 
     const PROXY_PORT: NonZeroU16 = nonzero!(444u16);
     const TARGET_PORT: NonZeroU16 = nonzero!(888u16);
@@ -604,6 +599,7 @@ mod test {
             .remove("host-1")
             .unwrap()
             .respond(Ok(LookupResult {
+                source: DnsSource::Cache,
                 ipv4: vec![],
                 ipv6: vec![ip_addr!(v6, "3fff::11")],
             }));
@@ -611,6 +607,7 @@ mod test {
             .remove("host-3")
             .unwrap()
             .respond(Ok(LookupResult {
+                source: DnsSource::Cache,
                 ipv4: vec![ip_addr!(v4, "192.0.2.55")],
                 ipv6: vec![ip_addr!(v6, "3fff::22")],
             }));
@@ -625,6 +622,7 @@ mod test {
             .remove("host-2")
             .unwrap()
             .respond(Ok(LookupResult {
+                source: DnsSource::Test,
                 ipv4: vec![],
                 ipv6: vec![ip_addr!(v6, "3fff::33")],
             }));
@@ -662,6 +660,7 @@ mod test {
             (
                 "proxy-domain",
                 LookupResult {
+                    source: DnsSource::Static,
                     ipv4: vec![ip_addr!(v4, "192.0.2.100")],
                     ipv6: vec![ip_addr!(v6, "3fff::ffff")],
                 },
@@ -669,6 +668,7 @@ mod test {
             (
                 "target-domain",
                 LookupResult {
+                    source: DnsSource::Static,
                     ipv4: vec![ip_addr!(v4, "192.0.2.1"), ip_addr!(v4, "192.0.2.2")],
                     ipv6: vec![ip_addr!(v6, "3fff::1234")],
                 },
@@ -678,7 +678,6 @@ mod test {
         let http_fragment = HttpRouteFragment {
             host_header: "target-domain".into(),
             path_prefix: "".into(),
-            http_version: None,
             front_name: None,
         };
 
@@ -694,7 +693,6 @@ mod test {
                 proxy: TcpRoute {
                     address: proxy,
                     port: PROXY_PORT,
-                    override_nagle_algorithm: OverrideNagleAlgorithm::UseSystemDefault,
                 },
                 target_addr: ProxyTarget::ResolvedLocally(target),
                 target_port: TARGET_PORT,

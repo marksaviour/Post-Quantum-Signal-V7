@@ -3,23 +3,23 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import ByteArray from '../internal/ByteArray.js';
-import * as Native from '../../Native.js';
+import ByteArray from '../internal/ByteArray';
+import * as Native from '../../../Native';
 
-import CallLinkPublicParams from './CallLinkPublicParams.js';
-import UuidCiphertext from '../groups/UuidCiphertext.js';
-import { Aci } from '../../Address.js';
+import CallLinkPublicParams from './CallLinkPublicParams';
+import UuidCiphertext from '../groups/UuidCiphertext';
+import { Aci } from '../../Address';
 
 export default class CallLinkSecretParams extends ByteArray {
   private readonly __type?: never;
 
-  static deriveFromRootKey(callLinkRootKey: Uint8Array): CallLinkSecretParams {
+  static deriveFromRootKey(callLinkRootKey: Buffer): CallLinkSecretParams {
     return new CallLinkSecretParams(
       Native.CallLinkSecretParams_DeriveFromRootKey(callLinkRootKey)
     );
   }
 
-  constructor(contents: Uint8Array) {
+  constructor(contents: Buffer) {
     super(contents, Native.CallLinkSecretParams_CheckValidContents);
   }
 

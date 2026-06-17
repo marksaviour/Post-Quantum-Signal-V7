@@ -23,7 +23,6 @@ import org.junit.Test;
 import org.signal.libsignal.protocol.ServiceId.Aci;
 import org.signal.libsignal.protocol.kdf.HKDF;
 import org.signal.libsignal.protocol.util.ByteUtil;
-import org.signal.libsignal.protocol.util.Hex;
 import org.signal.libsignal.util.Base64;
 import org.signal.libsignal.util.ResourceReader;
 
@@ -99,7 +98,7 @@ public class MessageBackupValidationTest {
     assertFalse("unexpected EOF", backupInfoLength == -1);
     assertTrue("single-byte varint", backupInfoLength < 0x80);
     final byte[] backupInfo = new byte[backupInfoLength];
-    assertEquals("unexpected EOF", backupInfoLength, input.read(backupInfo));
+    assertEquals("unexpected EOF", input.read(backupInfo), backupInfoLength);
     final OnlineBackupValidator backup = new OnlineBackupValidator(backupInfo, BACKUP_PURPOSE);
 
     int frameLength;
@@ -113,7 +112,7 @@ public class MessageBackupValidationTest {
         frameLength |= secondByte << 7;
       }
       final byte[] frame = new byte[frameLength];
-      assertEquals("unexpected EOF", frameLength, input.read(frame));
+      assertEquals("unexpected EOF", input.read(frame), frameLength);
       backup.addFrame(frame);
     }
 
@@ -160,32 +159,6 @@ public class MessageBackupValidationTest {
   }
 
   @Test
-  public void messageBackupKeyDeriveWithForwardSecrecyToken() throws Exception {
-    final var accountEntropy = "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm";
-    final var aci = new Aci(new UUID(0x1111111111111111L, 0x1111111111111111L));
-    final var token =
-        new BackupForwardSecrecyToken(
-            Hex.fromStringCondensedAssert(
-                "bfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbf"));
-
-    final var keyFromAEP = new MessageBackupKey(accountEntropy, aci, token);
-    assertFalse(
-        Arrays.equals(
-            keyFromAEP.getAesKey(), new MessageBackupKey(accountEntropy, aci).getAesKey()));
-
-    final var backupKey =
-        new BackupKey(
-            Hex.fromStringCondensedAssert(
-                "babababababababababababababababababababababababababababababababa"));
-    final var backupId = Hex.fromStringCondensedAssert("1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d");
-
-    final var keyFromBackupInfo = new MessageBackupKey(backupKey, backupId, token);
-    assertFalse(
-        Arrays.equals(
-            keyFromAEP.getAesKey(), new MessageBackupKey(backupKey, backupId).getAesKey()));
-  }
-
-  @Test
   public void emptyBackupFile() {
     Supplier<InputStream> factory =
         () -> {
@@ -193,13 +166,13 @@ public class MessageBackupValidationTest {
         };
     MessageBackupKey key = makeMessageBackupKey();
 
-    IOException error =
+    ValidationError error =
         assertThrows(
-            IOException.class,
+            ValidationError.class,
             () -> {
               MessageBackup.validate(key, BACKUP_PURPOSE, factory, 0);
             });
-    assertEquals("unexpected end of file", error.getMessage());
+    assertEquals(error.getMessage(), "not enough bytes for an HMAC");
   }
 
   @Test
@@ -228,7 +201,7 @@ public class MessageBackupValidationTest {
             () -> {
               MessageBackup.validate(key, BACKUP_PURPOSE, throwingStreamFactory, length);
             });
-    assertEquals(ThrowingInputStream.MESSAGE, thrown.getMessage());
+    assertEquals(thrown.getMessage(), ThrowingInputStream.MESSAGE);
   }
 
   @Test
@@ -251,11 +224,12 @@ public class MessageBackupValidationTest {
         };
     MessageBackupKey key = makeMessageBackupKey();
 
-    assertThrows(
-        IOException.class,
-        () -> {
-          MessageBackup.validate(key, BACKUP_PURPOSE, factory, 0);
-        });
+    ValidationError error =
+        assertThrows(
+            ValidationError.class,
+            () -> {
+              MessageBackup.validate(key, BACKUP_PURPOSE, factory, 0);
+            });
     assertTrue("never actually opened?", openCount.get() > 0);
     assertEquals("stream(s) not properly closed", openCount.get(), closeCount.get());
   }

@@ -9,9 +9,10 @@ import collections
 import difflib
 import itertools
 import os
-import re
 import subprocess
+import re
 import sys
+
 from typing import Iterable, Iterator, Tuple
 
 Args = collections.namedtuple('Args', ['verify'])
@@ -40,8 +41,8 @@ def split_rust_args(args: str) -> Iterator[Tuple[str, str]]:
 
     Account for templates, tuples, and slices.
     """
-    while ': ' in args:
-        (name, args) = args.split(': ', maxsplit=1)
+    while ':' in args:
+        (name, args) = args.split(':', maxsplit=1)
         if name.startswith('mut '):
             name = name[4:]
         open_pairs = 0
@@ -63,36 +64,31 @@ def translate_to_ts(typ: str) -> str:
     typ = typ.replace(' ', '')
 
     type_map = {
-        '()': 'void',
-        '&[u8]': 'Uint8Array',
-        'i32': 'number',
-        'u8': 'number',
-        'u16': 'number',
-        'u32': 'number',
-        'u64': 'bigint',
-        'bool': 'boolean',
-        'String': 'string',
-        '&str': 'string',
-        'Vec<u8>': 'Uint8Array',
-        'Box<[u8]>': 'Uint8Array',
-        'bytes::Bytes': 'Uint8Array',
-        'ServiceId': 'Uint8Array',
-        'Aci': 'Uint8Array',
-        'Pni': 'Uint8Array',
-        'E164': 'string',
-        "ServiceIdSequence<'_>": 'Uint8Array',
-        'PathAndQuery': 'string',
-        'LanguageList': 'string[]',
-        '&BackupKey': 'Uint8Array',
-        'MultiRecipientSendAuthorization': 'Uint8Array|null',
-        'DisconnectCause': 'Error|null',
+        "()": "void",
+        "&[u8]": "Buffer",
+        "i32": "number",
+        "u8": "number",
+        "u16": "number",
+        "u32": "number",
+        "u64": "bigint",
+        "bool": "boolean",
+        "String": "string",
+        "&str": "string",
+        "Vec<u8>": "Buffer",
+        "Box<[u8]>": "Buffer",
+        "ServiceId": "Buffer",
+        "Aci": "Buffer",
+        "Pni": "Buffer",
+        "E164": "string",
+        "ServiceIdSequence<'_>": "Buffer",
+        "PathAndQuery": "string",
     }
 
     if typ in type_map:
         return type_map[typ]
 
     if typ.startswith('[u8;') or typ.startswith('&[u8;'):
-        return 'Uint8Array'
+        return 'Buffer'
 
     if typ.startswith('&mutdyn'):
         return typ[7:]
@@ -126,31 +122,16 @@ def translate_to_ts(typ: str) -> str:
     if typ.startswith('&'):
         return 'Wrapper<' + typ[1:] + '>'
 
-    if typ.startswith('('):
-        assert typ.endswith(')'), typ
-        inner = typ[1:-1].split(',')
-        if len(inner) == 1:
-            return translate_to_ts(inner[0])
-        return '[' + ', '.join(translate_to_ts(x) for x in inner) + ']'
-
     if typ.startswith('Option<'):
         assert typ.endswith('>')
         return translate_to_ts(typ[7:-1]) + ' | null'
 
     if typ.startswith('Result<'):
         assert typ.endswith('>')
-        type_args = typ[7:-1]
-        (success_type, *failure_type) = type_args.rsplit(',', 1)
-        if failure_type and ')' in failure_type[0]:
-            success_type = type_args
-        return translate_to_ts(success_type)
-
-    if typ.startswith('std::result::Result<'):
-        assert typ.endswith('>')
-        type_args = typ[20:-1]
-        (success_type, *failure_type) = type_args.rsplit(',', 1)
-        if failure_type and ')' in failure_type[0]:
-            success_type = type_args
+        if ',' in typ:
+            success_type = typ[7:].split(',')[0]
+        else:
+            success_type = typ[7:-1]
         return translate_to_ts(success_type)
 
     if typ.startswith('Promise<'):
@@ -174,14 +155,14 @@ def translate_to_ts(typ: str) -> str:
 
 
 DIAGNOSTICS_TO_IGNORE = [
-    r'warning: \d+ warnings? emitted',
-    r'warning: unused import',
-    r'warning: field.+ never read',
-    r'warning: variant.+ never constructed',
-    r'warning: method.+ never used',
-    r'warning: associated function.+ never used',
+    r"warning: \d+ warnings? emitted",
+    r"warning: unused import",
+    r"warning: field.+ never read",
+    r"warning: variant.+ never constructed",
+    r"warning: method.+ never used",
+    r"warning: associated function.+ never used",
 ]
-SHOULD_IGNORE_PATTERN = re.compile('(' + ')|('.join(DIAGNOSTICS_TO_IGNORE) + ')')
+SHOULD_IGNORE_PATTERN = re.compile("(" + ")|(".join(DIAGNOSTICS_TO_IGNORE) + ")")
 
 
 def camelcase(arg: str) -> str:
@@ -191,33 +172,6 @@ def camelcase(arg: str) -> str:
         r'([^_])_([^_])',
         lambda match: match.group(1) + match.group(2).upper(),
         arg)
-
-
-def rewrite_function_as_property(ts_function: str) -> str:
-    return ts_function.replace('(', ': (', 1).replace('):', ') =>')
-
-
-def rewrite_fn(function_match: re.Match[str]) -> str:
-    (prefix, fn_args, ret_type) = function_match.groups()
-
-    ts_ret_type = translate_to_ts(ret_type)
-    ts_args = []
-
-    for (arg_name, arg_type) in split_rust_args(fn_args):
-        ts_arg_type = translate_to_ts(arg_type)
-        ts_args.append('%s: %s' % (camelcase(arg_name.strip()), ts_arg_type))
-
-    return '%s(%s): %s;' % (prefix, ', '.join(ts_args), ts_ret_type)
-
-
-def rewrite_trait(decl: str, function_sig: re.Pattern[str]) -> Iterator[str]:
-    for line in decl.split('\\n'):
-        if function_match := function_sig.match(line.rstrip(';')):
-            yield '  ' + rewrite_function_as_property(rewrite_fn(function_match))
-            continue
-
-        # Fix backslash-escaped double-quotes.
-        yield bytes(line, 'utf-8').decode('unicode_escape')
 
 
 def collect_decls(crate_dir: str, features: Iterable[str] = ()) -> Iterator[str]:
@@ -240,7 +194,7 @@ def collect_decls(crate_dir: str, features: Iterable[str] = ()) -> Iterator[str]
 
     had_error = False
     for l in stderr.split('\n'):
-        if l == '':
+        if l == "":
             continue
 
         if SHOULD_IGNORE_PATTERN.search(l):
@@ -250,7 +204,7 @@ def collect_decls(crate_dir: str, features: Iterable[str] = ()) -> Iterator[str]
         had_error = True
 
     if had_error:
-        print('Exiting with error')
+        print("Exiting with error")
         sys.exit(1)
 
     comment_decl = re.compile(r'\s*///\s*ts: (.+)')
@@ -259,7 +213,7 @@ def collect_decls(crate_dir: str, features: Iterable[str] = ()) -> Iterator[str]
 
     # Make sure /not/ to match arguments with nested parentheses,
     # which won't survive textual splitting below.
-    function_sig = re.compile(r'(.+)\(([^()]*)\): (.+)')
+    function_sig = re.compile(r'(.+)\(([^()]*)\): (.+);?')
 
     for line in stdout.split('\n'):
         match = comment_decl.match(line) or attr_decl.match(line)
@@ -268,36 +222,31 @@ def collect_decls(crate_dir: str, features: Iterable[str] = ()) -> Iterator[str]
 
         (decl,) = match.groups()
 
-        if decl.startswith('export /*trait*/ type '):
-            yield '\n'.join(rewrite_trait(decl, function_sig))
+        function_match = function_sig.match(decl)
+        if function_match is None:
+            yield decl
             continue
 
-        if function_match := function_sig.match(decl):
-            yield rewrite_fn(function_match)
-            continue
+        (prefix, fn_args, ret_type) = function_match.groups()
 
-        # Fix backslash-escaped double-quotes.
-        yield bytes(decl, 'utf-8').decode('unicode_escape')
+        ts_ret_type = translate_to_ts(ret_type)
+        ts_args = []
+        if '::' in fn_args:
+            raise Exception(f'Paths are not supported. Use alias for the type of \'{fn_args}\'')
+
+        for (arg_name, arg_type) in split_rust_args(fn_args):
+            ts_arg_type = translate_to_ts(arg_type)
+            ts_args.append('%s: %s' % (camelcase(arg_name.strip()), ts_arg_type))
+
+        yield '%s(%s): %s;' % (prefix, ', '.join(ts_args), ts_ret_type)
 
 
 def expand_template(template_file: str, decls: Iterable[str]) -> str:
-    decls = list(decls)
-    with open(template_file, 'r') as f:
+    with open(template_file, "r") as f:
         contents = f.read()
-
-        # Rewrite from function syntax to property syntax to take advantage of
-        # https://www.typescriptlang.org/tsconfig/#strictFunctionTypes.
-        contents = contents.replace('NATIVE_FNS;', '\n  '.join(
-            rewrite_function_as_property(x.removeprefix('export function '))
-            for x in decls if x.startswith('export function ')
-        ))
-        contents = contents.replace('NATIVE_FN_NAMES', ''.join(
-            '\n  ' + x.removeprefix('export function ').split('(')[0] + ','
-            for x in decls if x.startswith('export function ')
-        ) + '\n')
-        contents = contents.replace('NATIVE_TYPES;', '\n'.join(
-            'export ' + x.removeprefix('export ') for x in decls if not x.startswith('export function ')
-        ))
+        contents += "\n"
+        contents += "\n".join(sorted(decls))
+        contents += "\n"
 
         return contents
 
@@ -310,10 +259,10 @@ def verify_contents(expected_output_file: str, expected_contents: str) -> None:
     if first_line:
         sys.stdout.write(first_line)
         sys.stdout.writelines(diff)
-        sys.exit(f'error: {expected_output_file} not up to date; re-run {sys.argv[0]}!')
+        sys.exit(f"error: {expected_output_file} not up to date; re-run {sys.argv[0]}!")
 
 
-Crate = collections.namedtuple('Crate', ['path', 'features'], defaults=[()])
+Crate = collections.namedtuple('Crate', ["path", "features"], defaults=[()])
 
 
 def convert_to_typescript(rust_crates: Iterable[Crate], ts_in_path: str, ts_out_path: str, verify: bool) -> None:
@@ -333,7 +282,7 @@ def convert_to_typescript(rust_crates: Iterable[Crate], ts_in_path: str, ts_out_
 def main() -> None:
     args = parse_args()
     our_abs_dir = os.path.dirname(os.path.realpath(__file__))
-    output_file_name = 'Native.ts'
+    output_file_name = 'Native.d.ts'
 
     convert_to_typescript(
         rust_crates=[
@@ -343,7 +292,7 @@ def main() -> None:
             Crate(path=os.path.join(our_abs_dir, '..', '..', 'shared', 'testing'), features=('node', 'signal-media')),
         ],
         ts_in_path=os.path.join(our_abs_dir, output_file_name + '.in'),
-        ts_out_path=os.path.join(our_abs_dir, '..', '..', '..', '..', 'node', 'ts', output_file_name),
+        ts_out_path=os.path.join(our_abs_dir, '..', '..', '..', '..', 'node', output_file_name),
         verify=args.verify,
     )
 

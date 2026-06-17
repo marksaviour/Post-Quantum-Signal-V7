@@ -34,7 +34,7 @@ use boring_signal::pkey::{PKey, PKeyRef, Public};
 use boring_signal::x509::crl::X509CRLRef;
 use boring_signal::x509::store::{X509Store, X509StoreBuilder};
 use boring_signal::x509::verify::X509VerifyFlags;
-use boring_signal::x509::{X509, X509Ref};
+use boring_signal::x509::{X509Ref, X509};
 use hex::ToHex;
 use uuid::Uuid;
 
@@ -93,15 +93,16 @@ pub fn verify_remote_attestation(
     let attestation = attest(evidence_bytes, endorsement_bytes, current_time)?;
 
     // 4. Verify the status of the Intel® SGX TCB described in the chain.
-    if let TcbStanding::SWHardeningNeeded { advisory_ids } = attestation.tcb_standing
-        && advisory_ids
+    if let TcbStanding::SWHardeningNeeded { advisory_ids } = attestation.tcb_standing {
+        if advisory_ids
             .iter()
             .any(|id| !acceptable_sw_advisories.contains(&id.as_str()))
-    {
-        return Err(Error::new(format!(
-            "TCB contains unmitigated unaccepted advisory ids: {advisory_ids:?}"
-        ))
-        .into());
+        {
+            return Err(Error::new(format!(
+                "TCB contains unmitigated unaccepted advisory ids: {advisory_ids:?}"
+            ))
+            .into());
+        }
     }
 
     // 5. Verify the enclave measurements in the Quote reflect an enclave identity expected.
@@ -371,7 +372,7 @@ pub(crate) fn from_trusted(
                 .expect("haven't yet overflowed time_t"),
         );
         for &cert in trusted_certs {
-            store_builder.add_cert(cert)?;
+            store_builder.add_cert(cert.to_owned())?;
         }
         for &crl in trusted_crls {
             store_builder.add_crl(crl.to_owned())?;
@@ -759,16 +760,14 @@ mod test {
         let evidence_bytes = include_bytes!("../tests/data/dcap-expired.evidence");
         let endorsements_bytes = include_bytes!("../tests/data/dcap-expired.endorsements");
 
-        assert!(
-            verify_remote_attestation(
-                evidence_bytes.as_ref(),
-                endorsements_bytes.as_ref(),
-                &EXPECTED_MRENCLAVE,
-                ACCEPTED_SW_ADVISORIES,
-                current_time,
-            )
-            .is_err()
-        );
+        assert!(verify_remote_attestation(
+            evidence_bytes.as_ref(),
+            endorsements_bytes.as_ref(),
+            &EXPECTED_MRENCLAVE,
+            ACCEPTED_SW_ADVISORIES,
+            current_time,
+        )
+        .is_err());
     }
 
     #[test]

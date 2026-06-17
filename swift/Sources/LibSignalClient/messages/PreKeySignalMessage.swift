@@ -7,24 +7,21 @@ import Foundation
 import SignalFfi
 
 public class PreKeySignalMessage: NativeHandleOwner<SignalMutPointerPreKeySignalMessage> {
-    override internal class func destroyNativeHandle(
-        _ handle: NonNull<SignalMutPointerPreKeySignalMessage>
-    ) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerPreKeySignalMessage>) -> SignalFfiErrorRef? {
         return signal_pre_key_signal_message_destroy(handle.pointer)
     }
 
     public convenience init<Bytes: ContiguousBytes>(bytes: Bytes) throws {
-        let result = try bytes.withUnsafeBorrowedBuffer { bytes in
-            try invokeFnReturningValueByPointer(.init()) {
-                signal_pre_key_signal_message_deserialize($0, bytes)
-            }
+        var result = SignalMutPointerPreKeySignalMessage()
+        try bytes.withUnsafeBorrowedBuffer {
+            try checkError(signal_pre_key_signal_message_deserialize(&result, $0))
         }
         self.init(owned: NonNull(result)!)
     }
 
-    public func serialize() throws -> Data {
+    public func serialize() throws -> [UInt8] {
         return try withNativeHandle { nativeHandle in
-            try invokeFnReturningData {
+            try invokeFnReturningArray {
                 signal_pre_key_signal_message_serialize($0, nativeHandle.const())
             }
         }

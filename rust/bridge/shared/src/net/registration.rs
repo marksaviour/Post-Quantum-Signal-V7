@@ -5,17 +5,20 @@
 use std::collections::HashSet;
 
 use libsignal_bridge_macros::{bridge_fn, bridge_io};
-use libsignal_bridge_types::net::TokioAsyncContext;
 use libsignal_bridge_types::net::registration::{
     ConnectChatBridge, RegisterAccountInner, RegisterAccountRequest, RegistrationAccountAttributes,
-    RegistrationCreateSessionRequest, RegistrationPushToken, RegistrationService,
+    RegistrationCreateSessionRequest, RegistrationPushTokenType, RegistrationService,
     SignedPublicPreKey,
 };
+use libsignal_bridge_types::net::TokioAsyncContext;
 use libsignal_bridge_types::*;
-use libsignal_net::chat::LanguageList;
-use libsignal_net_chat::api::ChallengeOption;
-use libsignal_net_chat::api::registration::*;
-use libsignal_net_chat::registration::RequestError;
+use libsignal_net::registration::{
+    AccountKeys, CheckSvr2CredentialsError, CheckSvr2CredentialsResponse, CreateSessionError,
+    ForServiceIds, NewMessageNotification, RegisterAccountError, RegisterAccountResponse,
+    RegisterResponseBadge, RegistrationSession, RequestError, RequestVerificationCodeError,
+    ResumeSessionError, SessionId, SubmitVerificationError, UpdateSessionError,
+    VerificationTransport,
+};
 use libsignal_protocol::*;
 use uuid::Uuid;
 
@@ -55,20 +58,21 @@ async fn RegistrationService_ResumeSession(
     .await
 }
 
-#[bridge_io(TokioAsyncContext, node = false)]
+#[bridge_io(TokioAsyncContext)]
 async fn RegistrationService_RequestPushChallenge(
     service: &RegistrationService,
-    push_token: RegistrationPushToken,
+    push_token: String,
+    push_token_type: RegistrationPushTokenType,
 ) -> Result<(), RequestError<UpdateSessionError>> {
     service
         .0
         .lock()
         .await
-        .request_push_challenge(&push_token)
+        .request_push_challenge(&push_token, push_token_type)
         .await
 }
 
-#[bridge_io(TokioAsyncContext, node = false)]
+#[bridge_io(TokioAsyncContext)]
 async fn RegistrationService_SubmitPushChallenge(
     service: &RegistrationService,
     push_challenge: String,
@@ -86,13 +90,13 @@ async fn RegistrationService_RequestVerificationCode(
     service: &RegistrationService,
     transport: AsType<VerificationTransport, String>,
     client: String,
-    languages: LanguageList,
+    languages: Box<[String]>,
 ) -> Result<(), RequestError<RequestVerificationCodeError>> {
     service
         .0
         .lock()
         .await
-        .request_verification_code(transport.into_inner(), &client, languages)
+        .request_verification_code(transport.into_inner(), &client, &languages)
         .await
 }
 
@@ -192,7 +196,7 @@ async fn RegistrationService_ReregisterAccount(
         .take()
         .expect("not taken");
 
-    libsignal_net_chat::registration::reregister_account(
+    libsignal_net::registration::reregister_account(
         &number,
         connect_chat.create_chat_connector(tokio::runtime::Handle::current()),
         message_notification.as_deref(),
@@ -267,7 +271,7 @@ fn RegistrationSession_GetNextVerificationAttemptSeconds(
 #[bridge_fn]
 fn RegistrationSession_GetRequestedInformation(
     session: &RegistrationSession,
-) -> Box<[ChallengeOption]> {
+) -> Box<[RegistrationSessionRequestedInformation]> {
     session.requested_information.iter().copied().collect()
 }
 
@@ -284,7 +288,7 @@ fn RegisterAccountRequest_SetSkipDeviceTransfer(register_account: &RegisterAccou
         .expect("not poisoned")
         .as_mut()
         .expect("not taken")
-        .device_transfer = Some(SkipDeviceTransfer);
+        .device_transfer = Some(libsignal_net::registration::SkipDeviceTransfer);
 }
 
 #[bridge_fn]
@@ -349,6 +353,8 @@ fn RegisterAccountRequest_SetIdentityPublicKey(
     let account = guard.as_mut().expect("not taken");
     *account.identity_keys.get_mut(identity_type.into_inner()) = Some(*identity_key);
 }
+
+pub use libsignal_bridge_types::net::registration::RegistrationSessionRequestedInformation;
 
 #[bridge_fn]
 fn RegisterAccountRequest_SetIdentitySignedPreKey(

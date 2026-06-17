@@ -15,16 +15,11 @@ public class KEMKeyPair: ClonableHandleOwner<SignalMutPointerKyberKeyPair>, @unc
         }
     }
 
-    override internal class func cloneNativeHandle(
-        _ newHandle: inout SignalMutPointerKyberKeyPair,
-        currentHandle: SignalConstPointerKyberKeyPair
-    ) -> SignalFfiErrorRef? {
+    override internal class func cloneNativeHandle(_ newHandle: inout SignalMutPointerKyberKeyPair, currentHandle: SignalConstPointerKyberKeyPair) -> SignalFfiErrorRef? {
         return signal_kyber_key_pair_clone(&newHandle, currentHandle)
     }
 
-    override internal class func destroyNativeHandle(
-        _ handle: NonNull<SignalMutPointerKyberKeyPair>
-    ) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerKyberKeyPair>) -> SignalFfiErrorRef? {
         return signal_kyber_key_pair_destroy(handle.pointer)
     }
 
@@ -73,31 +68,26 @@ extension SignalConstPointerKyberKeyPair: SignalConstPointer {
 
 public class KEMPublicKey: ClonableHandleOwner<SignalMutPointerKyberPublicKey>, @unchecked Sendable {
     public convenience init<Bytes: ContiguousBytes>(_ bytes: Bytes) throws {
-        let handle = try bytes.withUnsafeBorrowedBuffer { bytes in
-            try invokeFnReturningValueByPointer(.init()) {
-                signal_kyber_public_key_deserialize($0, bytes)
-            }
+        let handle = try bytes.withUnsafeBorrowedBuffer {
+            var result = SignalMutPointerKyberPublicKey()
+            try checkError(signal_kyber_public_key_deserialize(&result, $0))
+            return result
         }
         self.init(owned: NonNull(handle)!)
     }
 
-    override internal class func cloneNativeHandle(
-        _ newHandle: inout SignalMutPointerKyberPublicKey,
-        currentHandle: SignalConstPointerKyberPublicKey
-    ) -> SignalFfiErrorRef? {
+    override internal class func cloneNativeHandle(_ newHandle: inout SignalMutPointerKyberPublicKey, currentHandle: SignalConstPointerKyberPublicKey) -> SignalFfiErrorRef? {
         return signal_kyber_public_key_clone(&newHandle, currentHandle)
     }
 
-    override internal class func destroyNativeHandle(
-        _ handle: NonNull<SignalMutPointerKyberPublicKey>
-    ) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerKyberPublicKey>) -> SignalFfiErrorRef? {
         return signal_kyber_public_key_destroy(handle.pointer)
     }
 
-    public func serialize() -> Data {
+    public func serialize() -> [UInt8] {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningData {
+                try invokeFnReturningArray {
                     signal_kyber_public_key_serialize($0, nativeHandle.const())
                 }
             }
@@ -129,8 +119,8 @@ extension SignalConstPointerKyberPublicKey: SignalConstPointer {
 
 extension KEMPublicKey: Equatable {
     public static func == (lhs: KEMPublicKey, rhs: KEMPublicKey) -> Bool {
-        return failOnError {
-            try withAllBorrowed(lhs, rhs) { lHandle, rHandle in
+        return withNativeHandles(lhs, rhs) { lHandle, rHandle in
+            failOnError {
                 try invokeFnReturningBool {
                     signal_kyber_public_key_equals($0, lHandle.const(), rHandle.const())
                 }
@@ -141,31 +131,26 @@ extension KEMPublicKey: Equatable {
 
 public class KEMSecretKey: ClonableHandleOwner<SignalMutPointerKyberSecretKey>, @unchecked Sendable {
     public convenience init<Bytes: ContiguousBytes>(_ bytes: Bytes) throws {
-        let handle = try bytes.withUnsafeBorrowedBuffer { bytes in
-            try invokeFnReturningValueByPointer(.init()) {
-                signal_kyber_secret_key_deserialize($0, bytes)
-            }
+        let handle = try bytes.withUnsafeBorrowedBuffer {
+            var result = SignalMutPointerKyberSecretKey()
+            try checkError(signal_kyber_secret_key_deserialize(&result, $0))
+            return result
         }
         self.init(owned: NonNull(handle)!)
     }
 
-    override internal class func cloneNativeHandle(
-        _ newHandle: inout SignalMutPointerKyberSecretKey,
-        currentHandle: SignalConstPointerKyberSecretKey
-    ) -> SignalFfiErrorRef? {
+    override internal class func cloneNativeHandle(_ newHandle: inout SignalMutPointerKyberSecretKey, currentHandle: SignalConstPointerKyberSecretKey) -> SignalFfiErrorRef? {
         return signal_kyber_secret_key_clone(&newHandle, currentHandle)
     }
 
-    override internal class func destroyNativeHandle(
-        _ handle: NonNull<SignalMutPointerKyberSecretKey>
-    ) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerKyberSecretKey>) -> SignalFfiErrorRef? {
         return signal_kyber_secret_key_destroy(handle.pointer)
     }
 
-    public func serialize() -> Data {
+    public func serialize() -> [UInt8] {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningData {
+                try invokeFnReturningArray {
                     signal_kyber_secret_key_serialize($0, nativeHandle.const())
                 }
             }

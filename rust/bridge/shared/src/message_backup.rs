@@ -4,12 +4,11 @@
 //
 
 use futures_util::io::BufReader;
-use libsignal_account_keys::{AccountEntropyPool, BACKUP_FORWARD_SECRECY_TOKEN_LEN};
+use libsignal_account_keys::AccountEntropyPool;
 use libsignal_bridge_macros::*;
 use libsignal_bridge_types::message_backup::*;
 use libsignal_message_backup::backup::Purpose;
 use libsignal_message_backup::frame::LimitedReaderFactory;
-use libsignal_message_backup::json::exporter::FrameExportResult as JsonFrameExportResult;
 use libsignal_message_backup::{BackupReader, FoundUnknownField, ReadError, ReadResult};
 use libsignal_protocol::Aci;
 
@@ -29,18 +28,16 @@ bridge_handle_fns!(
 fn MessageBackupKey_FromAccountEntropyPool(
     account_entropy: AccountEntropyPool,
     aci: Aci,
-    forward_secrecy_token: Option<&[u8; BACKUP_FORWARD_SECRECY_TOKEN_LEN]>,
 ) -> MessageBackupKey {
-    MessageBackupKey::from_account_entropy_pool(&account_entropy, aci, forward_secrecy_token)
+    MessageBackupKey::from_account_entropy_pool(&account_entropy, aci)
 }
 
 #[bridge_fn]
 fn MessageBackupKey_FromBackupKeyAndBackupId(
     backup_key: &[u8; 32],
     backup_id: &[u8; 16],
-    forward_secrecy_token: Option<&[u8; BACKUP_FORWARD_SECRECY_TOKEN_LEN]>,
 ) -> MessageBackupKey {
-    MessageBackupKey::from_backup_key_and_backup_id(backup_key, backup_id, forward_secrecy_token)
+    MessageBackupKey::from_backup_key_and_backup_id(backup_key, backup_id)
 }
 
 #[bridge_fn(ffi = false, node = false)]
@@ -118,7 +115,6 @@ async fn MessageBackupValidator_Validate(
 }
 
 bridge_handle_fns!(OnlineBackupValidator, clone = false);
-bridge_handle_fns!(BackupJsonExporter, clone = false, ffi = false, jni = false);
 
 #[bridge_fn]
 fn OnlineBackupValidator_New(
@@ -139,11 +135,15 @@ fn OnlineBackupValidator_AddFrame(
         .parse_and_add_frame(frame, |_| ())
         .map_err(ReadError::with_error_only)?;
 
-    for entry in unknown_fields
-        .into_iter()
-        .map(FoundUnknownField::in_frame(0))
-    {
-        log::warn!("{entry}");
+    for (path, value) in unknown_fields {
+        log::warn!(
+            "{}",
+            FoundUnknownField {
+                frame_index: 0,
+                path,
+                value,
+            }
+        );
     }
 
     Ok(())
@@ -152,41 +152,4 @@ fn OnlineBackupValidator_AddFrame(
 #[bridge_fn]
 fn OnlineBackupValidator_Finalize(backup: &mut OnlineBackupValidator) -> Result<(), ReadError> {
     backup.finalize().map_err(ReadError::with_error_only)
-}
-
-#[bridge_fn(ffi = false, jni = false)]
-fn BackupJsonExporter_New(
-    backup_info: &[u8],
-    should_validate: bool,
-) -> Result<BackupJsonExporter, ReadError> {
-    let (exporter, initial_chunk) =
-        libsignal_message_backup::json::exporter::JsonExporter::new(backup_info, should_validate)
-            .map_err(ReadError::with_error_only)?;
-
-    Ok(BackupJsonExporter::new(exporter, initial_chunk))
-}
-
-#[bridge_fn(ffi = false, jni = false)]
-fn BackupJsonExporter_GetInitialChunk(exporter: &BackupJsonExporter) -> String {
-    exporter.initial_chunk().clone()
-}
-
-#[bridge_fn(ffi = false, jni = false)]
-fn BackupJsonExporter_ExportFrames(
-    exporter: &mut BackupJsonExporter,
-    frames: &[u8],
-) -> Result<Box<[JsonFrameExportResult]>, ReadError> {
-    exporter
-        .inner_mut()
-        .export_frames(frames)
-        .map(|results| results.into_boxed_slice())
-        .map_err(ReadError::with_error_only)
-}
-
-#[bridge_fn(ffi = false, jni = false)]
-fn BackupJsonExporter_Finish(exporter: &mut BackupJsonExporter) -> Result<(), ReadError> {
-    exporter
-        .inner_mut()
-        .finish()
-        .map_err(ReadError::with_error_only)
 }

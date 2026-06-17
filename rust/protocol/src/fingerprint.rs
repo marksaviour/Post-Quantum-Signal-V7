@@ -7,21 +7,11 @@ use std::fmt;
 use std::fmt::Write;
 
 use prost::Message;
-use sha2::Sha512;
 use sha2::digest::Digest;
+use sha2::Sha512;
 use subtle::ConstantTimeEq;
 
-use crate::{IdentityKey, proto};
-
-#[derive(Debug, displaydoc::Display)]
-pub enum Error {
-    /// fingerprint version number mismatch them {theirs} us {ours}
-    VersionMismatch { theirs: u32, ours: u32 },
-    /// fingerprint parsing error: {0}
-    ParsingError(&'static str),
-    /// Invalid fingerprint iterations {0}
-    InvalidIterationCount(u32),
-}
+use crate::{proto, IdentityKey, Result, SignalProtocolError};
 
 #[derive(Debug, Clone)]
 pub struct DisplayableFingerprint {
@@ -39,10 +29,10 @@ impl fmt::Display for DisplayableFingerprint {
     }
 }
 
-fn get_encoded_string(fprint: &[u8]) -> Result<String, Error> {
+fn get_encoded_string(fprint: &[u8]) -> Result<String> {
     if fprint.len() < 30 {
-        return Err(Error::ParsingError(
-            "DisplayableFingerprint created with short encoding",
+        return Err(SignalProtocolError::InvalidArgument(
+            "DisplayableFingerprint created with short encoding".to_string(),
         ));
     }
 
@@ -64,7 +54,7 @@ fn get_encoded_string(fprint: &[u8]) -> Result<String, Error> {
 }
 
 impl DisplayableFingerprint {
-    pub fn new(local: &[u8], remote: &[u8]) -> Result<Self, Error> {
+    pub fn new(local: &[u8], remote: &[u8]) -> Result<Self> {
         Ok(Self {
             local: get_encoded_string(local)?,
             remote: get_encoded_string(remote)?,
@@ -88,26 +78,28 @@ impl ScannableFingerprint {
         }
     }
 
-    pub fn deserialize(protobuf: &[u8]) -> Result<Self, Error> {
+    pub fn deserialize(protobuf: &[u8]) -> Result<Self> {
         let fingerprint = proto::fingerprint::CombinedFingerprints::decode(protobuf)
-            .map_err(|_| Error::ParsingError("failed to decode protobuf"))?;
+            .map_err(|_| SignalProtocolError::FingerprintParsingError)?;
 
         Ok(Self {
             version: fingerprint
                 .version
-                .ok_or(Error::ParsingError("missing version"))?,
+                .ok_or(SignalProtocolError::FingerprintParsingError)?,
             local_fingerprint: fingerprint
                 .local_fingerprint
-                .and_then(|m| m.content)
-                .ok_or(Error::ParsingError("missing local fingerprint"))?,
+                .ok_or(SignalProtocolError::FingerprintParsingError)?
+                .content
+                .ok_or(SignalProtocolError::FingerprintParsingError)?,
             remote_fingerprint: fingerprint
                 .remote_fingerprint
-                .and_then(|m| m.content)
-                .ok_or(Error::ParsingError("missing remote fingerprint"))?,
+                .ok_or(SignalProtocolError::FingerprintParsingError)?
+                .content
+                .ok_or(SignalProtocolError::FingerprintParsingError)?,
         })
     }
 
-    pub fn serialize(&self) -> Result<Vec<u8>, Error> {
+    pub fn serialize(&self) -> Result<Vec<u8>> {
         let combined_fingerprints = proto::fingerprint::CombinedFingerprints {
             version: Some(self.version),
             local_fingerprint: Some(proto::fingerprint::LogicalFingerprint {
@@ -121,30 +113,34 @@ impl ScannableFingerprint {
         Ok(combined_fingerprints.encode_to_vec())
     }
 
-    pub fn compare(&self, combined: &[u8]) -> Result<bool, Error> {
+    pub fn compare(&self, combined: &[u8]) -> Result<bool> {
         let combined = proto::fingerprint::CombinedFingerprints::decode(combined)
-            .map_err(|_| Error::ParsingError("failed to decode their protobuf"))?;
+            .map_err(|_| SignalProtocolError::FingerprintParsingError)?;
 
         let their_version = combined.version.unwrap_or(0);
 
         if their_version != self.version {
-            return Err(Error::VersionMismatch {
-                theirs: their_version,
-                ours: self.version,
-            });
+            return Err(SignalProtocolError::FingerprintVersionMismatch(
+                their_version,
+                self.version,
+            ));
         }
 
         let same1 = combined
             .local_fingerprint
             .as_ref()
-            .and_then(|m| m.content.as_ref())
-            .ok_or(Error::ParsingError("missing their local fingerprint"))?
+            .ok_or(SignalProtocolError::FingerprintParsingError)?
+            .content
+            .as_ref()
+            .ok_or(SignalProtocolError::FingerprintParsingError)?
             .ct_eq(&self.remote_fingerprint);
         let same2 = combined
             .remote_fingerprint
             .as_ref()
-            .and_then(|m| m.content.as_ref())
-            .ok_or(Error::ParsingError("missing their remote fingerprint"))?
+            .ok_or(SignalProtocolError::FingerprintParsingError)?
+            .content
+            .as_ref()
+            .ok_or(SignalProtocolError::FingerprintParsingError)?
             .ct_eq(&self.local_fingerprint);
 
         Ok(same1.into() && same2.into())
@@ -162,9 +158,11 @@ impl Fingerprint {
         iterations: u32,
         local_id: &[u8],
         local_key: &IdentityKey,
-    ) -> Result<Vec<u8>, Error> {
+    ) -> Result<Vec<u8>> {
         if iterations <= 1 || iterations > 1000000 {
-            return Err(Error::InvalidIterationCount(iterations));
+            return Err(SignalProtocolError::InvalidArgument(format!(
+                "Invalid fingerprint iterations {iterations}"
+            )));
         }
 
         let fingerprint_version = [0u8, 0u8]; // 0x0000
@@ -198,7 +196,7 @@ impl Fingerprint {
         local_key: &IdentityKey,
         remote_id: &[u8],
         remote_key: &IdentityKey,
-    ) -> Result<Fingerprint, Error> {
+    ) -> Result<Fingerprint> {
         let local_fingerprint = Fingerprint::get_fingerprint(iterations, local_id, local_key)?;
         let remote_fingerprint = Fingerprint::get_fingerprint(iterations, remote_id, remote_key)?;
 
@@ -208,8 +206,8 @@ impl Fingerprint {
         })
     }
 
-    pub fn display_string(&self) -> Result<String, Error> {
-        Ok(self.display.to_string())
+    pub fn display_string(&self) -> Result<String> {
+        Ok(format!("{}", self.display))
     }
 }
 
@@ -227,17 +225,17 @@ mod test {
 
     const DISPLAYABLE_FINGERPRINT_V1: &str =
         "300354477692869396892869876765458257569162576843440918079131";
-    const ALICE_SCANNABLE_FINGERPRINT_V1: &str = "080112220a201e301a0353dce3dbe7684cb8336e85136cdc0ee96219494ada305d62a7bd61df1a220a20d62cbf73a11592015b6b9f1682ac306fea3aaf3885b84d12bca631e9d4fb3a4d";
-    const BOB_SCANNABLE_FINGERPRINT_V1: &str = "080112220a20d62cbf73a11592015b6b9f1682ac306fea3aaf3885b84d12bca631e9d4fb3a4d1a220a201e301a0353dce3dbe7684cb8336e85136cdc0ee96219494ada305d62a7bd61df";
+    const ALICE_SCANNABLE_FINGERPRINT_V1 : &str = "080112220a201e301a0353dce3dbe7684cb8336e85136cdc0ee96219494ada305d62a7bd61df1a220a20d62cbf73a11592015b6b9f1682ac306fea3aaf3885b84d12bca631e9d4fb3a4d";
+    const BOB_SCANNABLE_FINGERPRINT_V1   : &str = "080112220a20d62cbf73a11592015b6b9f1682ac306fea3aaf3885b84d12bca631e9d4fb3a4d1a220a201e301a0353dce3dbe7684cb8336e85136cdc0ee96219494ada305d62a7bd61df";
 
-    const ALICE_SCANNABLE_FINGERPRINT_V2: &str = "080212220a201e301a0353dce3dbe7684cb8336e85136cdc0ee96219494ada305d62a7bd61df1a220a20d62cbf73a11592015b6b9f1682ac306fea3aaf3885b84d12bca631e9d4fb3a4d";
-    const BOB_SCANNABLE_FINGERPRINT_V2: &str = "080212220a20d62cbf73a11592015b6b9f1682ac306fea3aaf3885b84d12bca631e9d4fb3a4d1a220a201e301a0353dce3dbe7684cb8336e85136cdc0ee96219494ada305d62a7bd61df";
+    const ALICE_SCANNABLE_FINGERPRINT_V2 : &str = "080212220a201e301a0353dce3dbe7684cb8336e85136cdc0ee96219494ada305d62a7bd61df1a220a20d62cbf73a11592015b6b9f1682ac306fea3aaf3885b84d12bca631e9d4fb3a4d";
+    const BOB_SCANNABLE_FINGERPRINT_V2   : & str = "080212220a20d62cbf73a11592015b6b9f1682ac306fea3aaf3885b84d12bca631e9d4fb3a4d1a220a201e301a0353dce3dbe7684cb8336e85136cdc0ee96219494ada305d62a7bd61df";
 
     const ALICE_STABLE_ID: &str = "+14152222222";
     const BOB_STABLE_ID: &str = "+14153333333";
 
     #[test]
-    fn fingerprint_encodings() -> Result<(), Error> {
+    fn fingerprint_encodings() -> Result<()> {
         let l = vec![0x12; 32];
         let r = vec![0xBA; 32];
 
@@ -252,11 +250,11 @@ mod test {
     }
 
     #[test]
-    fn fingerprint_test_v1() -> Result<(), Error> {
+    fn fingerprint_test_v1() -> Result<()> {
         // testVectorsVersion1 in Java
 
-        let a_key = IdentityKey::decode(ALICE_IDENTITY).expect("valid");
-        let b_key = IdentityKey::decode(BOB_IDENTITY).expect("valid");
+        let a_key = IdentityKey::decode(ALICE_IDENTITY)?;
+        let b_key = IdentityKey::decode(BOB_IDENTITY)?;
 
         let version = 1;
         let iterations = 5200;
@@ -304,11 +302,11 @@ mod test {
     }
 
     #[test]
-    fn fingerprint_test_v2() -> Result<(), Error> {
+    fn fingerprint_test_v2() -> Result<()> {
         // testVectorsVersion2 in Java
 
-        let a_key = IdentityKey::decode(ALICE_IDENTITY).expect("valid");
-        let b_key = IdentityKey::decode(BOB_IDENTITY).expect("valid");
+        let a_key = IdentityKey::decode(ALICE_IDENTITY)?;
+        let b_key = IdentityKey::decode(BOB_IDENTITY)?;
 
         let version = 2;
         let iterations = 5200;
@@ -357,7 +355,7 @@ mod test {
     }
 
     #[test]
-    fn fingerprint_matching_identifiers() -> Result<(), Error> {
+    fn fingerprint_matching_identifiers() -> Result<()> {
         // testMatchingFingerprints
 
         use rand::rngs::OsRng;
@@ -397,34 +395,26 @@ mod test {
         );
         assert_eq!(format!("{}", a_fprint.display).len(), 60);
 
-        assert!(
-            a_fprint
-                .scannable
-                .compare(&b_fprint.scannable.serialize()?)?
-        );
-        assert!(
-            b_fprint
-                .scannable
-                .compare(&a_fprint.scannable.serialize()?)?
-        );
+        assert!(a_fprint
+            .scannable
+            .compare(&b_fprint.scannable.serialize()?)?);
+        assert!(b_fprint
+            .scannable
+            .compare(&a_fprint.scannable.serialize()?)?);
 
         // Java is missing this test
-        assert!(
-            !a_fprint
-                .scannable
-                .compare(&a_fprint.scannable.serialize()?)?
-        );
-        assert!(
-            !b_fprint
-                .scannable
-                .compare(&b_fprint.scannable.serialize()?)?
-        );
+        assert!(!a_fprint
+            .scannable
+            .compare(&a_fprint.scannable.serialize()?)?);
+        assert!(!b_fprint
+            .scannable
+            .compare(&b_fprint.scannable.serialize()?)?);
 
         Ok(())
     }
 
     #[test]
-    fn fingerprint_mismatching_fingerprints() -> Result<(), Error> {
+    fn fingerprint_mismatching_fingerprints() -> Result<()> {
         use rand::rngs::OsRng;
 
         use crate::IdentityKeyPair;
@@ -464,22 +454,18 @@ mod test {
             format!("{}", b_fprint.display)
         );
 
-        assert!(
-            !a_fprint
-                .scannable
-                .compare(&b_fprint.scannable.serialize()?)?
-        );
-        assert!(
-            !b_fprint
-                .scannable
-                .compare(&a_fprint.scannable.serialize()?)?
-        );
+        assert!(!a_fprint
+            .scannable
+            .compare(&b_fprint.scannable.serialize()?)?);
+        assert!(!b_fprint
+            .scannable
+            .compare(&a_fprint.scannable.serialize()?)?);
 
         Ok(())
     }
 
     #[test]
-    fn fingerprint_mismatching_identifiers() -> Result<(), Error> {
+    fn fingerprint_mismatching_identifiers() -> Result<()> {
         use rand::rngs::OsRng;
 
         use crate::IdentityKeyPair;
@@ -517,24 +503,20 @@ mod test {
             format!("{}", b_fprint.display)
         );
 
-        assert!(
-            !a_fprint
-                .scannable
-                .compare(&b_fprint.scannable.serialize()?)?
-        );
-        assert!(
-            !b_fprint
-                .scannable
-                .compare(&a_fprint.scannable.serialize()?)?
-        );
+        assert!(!a_fprint
+            .scannable
+            .compare(&b_fprint.scannable.serialize()?)?);
+        assert!(!b_fprint
+            .scannable
+            .compare(&a_fprint.scannable.serialize()?)?);
 
         Ok(())
     }
 
     #[test]
-    fn fingerprint_mismatching_versions() -> Result<(), Error> {
-        let a_key = IdentityKey::decode(ALICE_IDENTITY).expect("valid");
-        let b_key = IdentityKey::decode(BOB_IDENTITY).expect("valid");
+    fn fingerprint_mismatching_versions() -> Result<()> {
+        let a_key = IdentityKey::decode(ALICE_IDENTITY)?;
+        let b_key = IdentityKey::decode(BOB_IDENTITY)?;
 
         let iterations = 5200;
 

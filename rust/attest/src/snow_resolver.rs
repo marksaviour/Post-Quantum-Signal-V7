@@ -18,12 +18,34 @@ const TAGLEN: usize = 16;
 
 struct Rng<T>(T);
 
-impl<T: rand_core::RngCore + rand_core::CryptoRng + Send + Sync> Random for Rng<T> {
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), SnowError> {
-        rand_core::RngCore::fill_bytes(&mut self.0, dest);
+/// Implement the legacy RngCore trait in terms of the modern one.
+///
+/// This is necessary because the `snow` crate still depends on the legacy
+/// [`rand_core_06`] crate.` Once it moves to the same version of `rand` as
+/// everything else, the trait bounds can be replaced with ones from the
+/// [`rand_core`] crate.
+impl<T: rand_core::RngCore> rand_core_06::RngCore for Rng<T> {
+    fn next_u32(&mut self) -> u32 {
+        self.0.next_u32()
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.0.next_u64()
+    }
+
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        self.0.fill_bytes(dest)
+    }
+
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core_06::Error> {
+        self.0.fill_bytes(dest);
         Ok(())
     }
 }
+
+impl<T: rand_core::CryptoRng> rand_core_06::CryptoRng for Rng<T> {}
+
+impl<T: rand_core::RngCore + rand_core::CryptoRng + Send + Sync> Random for Rng<T> {}
 
 // From snow's resolvers/default.rs
 #[derive(Default)]
@@ -50,10 +72,9 @@ impl Dh for Dh25519 {
         self.pubkey = x25519::x25519(self.privkey, x25519::X25519_BASEPOINT_BYTES);
     }
 
-    fn generate(&mut self, rng: &mut dyn Random) -> Result<(), SnowError> {
-        rng.try_fill_bytes(&mut self.privkey)?;
+    fn generate(&mut self, rng: &mut dyn Random) {
+        rng.fill_bytes(&mut self.privkey);
         self.pubkey = x25519::x25519(self.privkey, x25519::X25519_BASEPOINT_BYTES);
-        Ok(())
     }
 
     fn pubkey(&self) -> &[u8] {
@@ -65,12 +86,7 @@ impl Dh for Dh25519 {
     }
 
     fn dh(&self, pubkey: &[u8], out: &mut [u8]) -> Result<(), SnowError> {
-        let result = x25519::x25519(
-            self.privkey,
-            pubkey[..self.pub_len()]
-                .try_into()
-                .expect("public key length checked by snow"),
-        );
+        let result = x25519::x25519(self.privkey, pubkey[..self.pub_len()].try_into().unwrap());
         out[..result.len()].copy_from_slice(&result);
         Ok(())
     }
@@ -159,8 +175,8 @@ impl Cipher for CipherChaChaPoly {
         "ChaChaPoly"
     }
 
-    fn set(&mut self, key: &[u8; 32]) {
-        self.key = *key;
+    fn set(&mut self, key: &[u8]) {
+        copy_slices!(key, &mut self.key);
     }
 
     fn encrypt(&self, nonce: u64, authtext: &[u8], plaintext: &[u8], out: &mut [u8]) -> usize {
@@ -171,7 +187,7 @@ impl Cipher for CipherChaChaPoly {
 
         let tag = ChaCha20Poly1305::new(&self.key.into())
             .encrypt_in_place_detached(&nonce_bytes.into(), authtext, &mut out[0..plaintext.len()])
-            .expect("can encrypt");
+            .unwrap();
 
         copy_slices!(tag, &mut out[plaintext.len()..]);
 
@@ -248,8 +264,7 @@ impl Kem for Kyber1024 {
     /// Generate a new private key.
     fn generate(&mut self, rng: &mut dyn Random) {
         let mut randomness = [0u8; 64];
-        rng.try_fill_bytes(&mut randomness)
-            .expect("can generate random bytes");
+        rng.fill_bytes(&mut randomness);
         let keypair = mlkem1024::generate_key_pair(randomness);
         (self.privkey, self.pubkey) = keypair.into_parts();
     }
@@ -265,18 +280,15 @@ impl Kem for Kyber1024 {
         pubkey: &[u8],
         shared_secret_out: &mut [u8],
         ciphertext_out: &mut [u8],
-    ) -> Result<(usize, usize), SnowError> {
+    ) -> Result<(usize, usize), ()> {
         let mlkem_pubkey = {
-            let key =
-                mlkem1024::MlKem1024PublicKey::try_from(pubkey).map_err(|_| SnowError::Input)?;
+            let key = mlkem1024::MlKem1024PublicKey::try_from(pubkey).map_err(|_| ())?;
             mlkem1024::validate_public_key(&key).then_some(key)
         }
-        .ok_or(SnowError::Input)?;
+        .ok_or(())?;
         // We don't get a RNG passed in, so currently we use OsRng directly:
         let mut randomness = [0u8; 32];
-        rand_core::OsRng
-            .try_fill_bytes(&mut randomness)
-            .expect("system RNG should always be available");
+        rand_core::OsRng.try_fill_bytes(&mut randomness).unwrap();
         let (ciphertext, shared_secret) = mlkem1024::encapsulate(&mlkem_pubkey, randomness);
         shared_secret_out.copy_from_slice(shared_secret.as_ref());
         ciphertext_out.copy_from_slice(ciphertext.as_ref());
@@ -284,13 +296,8 @@ impl Kem for Kyber1024 {
     }
 
     /// Decapsulate a ciphertext producing a shared secret.
-    fn decapsulate(
-        &self,
-        ciphertext: &[u8],
-        shared_secret_out: &mut [u8],
-    ) -> Result<usize, SnowError> {
-        let ciphertext =
-            mlkem1024::MlKem1024Ciphertext::try_from(ciphertext).map_err(|_| SnowError::Input)?;
+    fn decapsulate(&self, ciphertext: &[u8], shared_secret_out: &mut [u8]) -> Result<usize, ()> {
+        let ciphertext = mlkem1024::MlKem1024Ciphertext::try_from(ciphertext).map_err(|_| ())?;
         let shared_secret = mlkem1024::decapsulate(&self.privkey, &ciphertext);
         shared_secret_out.copy_from_slice(shared_secret.as_ref());
         Ok(libcrux_ml_kem::SHARED_SECRET_SIZE)

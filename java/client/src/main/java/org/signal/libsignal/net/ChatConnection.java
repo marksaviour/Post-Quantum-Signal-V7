@@ -9,7 +9,6 @@ import java.lang.ref.WeakReference;
 import java.net.MalformedURLException;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.function.BiFunction;
 import org.signal.libsignal.internal.CalledFromNative;
 import org.signal.libsignal.internal.CompletableFuture;
 import org.signal.libsignal.internal.FilterExceptions;
@@ -38,21 +37,6 @@ public abstract class ChatConnection extends NativeHandleGuard.SimpleOwner {
     this.chatListener = chatListener;
   }
 
-  /**
-   * Executes a function with both the chat connection handle and async context handle properly
-   * guarded. This ensures that neither object is finalized while the function is executing.
-   *
-   * @param function the function to execute with the guarded handles
-   * @param <T> the return type of the function
-   * @return the result of the function
-   */
-  <T> T runWithContextAndConnectionHandles(BiFunction<Long, Long, T> function) {
-    try (final NativeHandleGuard asyncContextHandle = new NativeHandleGuard(tokioAsyncContext);
-        final NativeHandleGuard chatConnectionHandle = new NativeHandleGuard(this)) {
-      return function.apply(asyncContextHandle.nativeHandle(), chatConnectionHandle.nativeHandle());
-    }
-  }
-
   protected static class ListenerBridge implements BridgeChatListener {
     // Stored as a weak reference because otherwise we'll have a reference cycle:
     // - After setting a listener, Rust has a GC GlobalRef to this ListenerBridge
@@ -64,18 +48,21 @@ public abstract class ChatConnection extends NativeHandleGuard.SimpleOwner {
       this.chat = new WeakReference<>(chat);
     }
 
-    public void receivedIncomingMessage(
+    public void onIncomingMessage(
         byte[] envelope, long serverDeliveryTimestamp, long sendAckHandle) {
 
-      var ack = new ChatConnectionListener.ServerMessageAck(sendAckHandle);
       ChatConnection chat = this.chat.get();
       if (chat == null) return;
       if (chat.chatListener == null) return;
 
-      chat.chatListener.onIncomingMessage(chat, envelope, serverDeliveryTimestamp, ack);
+      chat.chatListener.onIncomingMessage(
+          chat,
+          envelope,
+          serverDeliveryTimestamp,
+          new ChatConnectionListener.ServerMessageAck(chat.tokioAsyncContext, sendAckHandle));
     }
 
-    public void receivedQueueEmpty() {
+    public void onQueueEmpty() {
       ChatConnection chat = this.chat.get();
       if (chat == null) return;
       if (chat.chatListener == null) return;
@@ -83,7 +70,7 @@ public abstract class ChatConnection extends NativeHandleGuard.SimpleOwner {
       chat.chatListener.onQueueEmpty(chat);
     }
 
-    public void receivedAlerts(String[] alerts) {
+    public void onReceivedAlerts(String[] alerts) {
       ChatConnection chat = this.chat.get();
       if (chat == null) return;
       if (chat.chatListener == null) return;
@@ -91,7 +78,7 @@ public abstract class ChatConnection extends NativeHandleGuard.SimpleOwner {
       chat.chatListener.onReceivedAlerts(chat, alerts);
     }
 
-    public void connectionInterrupted(Throwable disconnectReason) {
+    public void onConnectionInterrupted(Throwable disconnectReason) {
       ChatConnection chat = this.chat.get();
       if (chat == null) return;
       if (chat.chatListener == null) return;
@@ -116,20 +103,19 @@ public abstract class ChatConnection extends NativeHandleGuard.SimpleOwner {
     void setChat(ChatConnection chat) {
       this.chat = new WeakReference<>(chat);
       if (savedAlerts != null) {
-        super.receivedAlerts(savedAlerts);
+        super.onReceivedAlerts(savedAlerts);
         savedAlerts = null;
       }
     }
 
-    @Override
-    public void receivedAlerts(String[] alerts) {
+    public void onReceivedAlerts(String[] alerts) {
       // This callback can happen before setChat, so we might need to replay it later.
       if (this.chat.get() == null) {
         savedAlerts = alerts;
         return;
       }
 
-      super.receivedAlerts(alerts);
+      super.onReceivedAlerts(alerts);
     }
   }
 

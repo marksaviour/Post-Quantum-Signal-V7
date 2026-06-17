@@ -5,8 +5,10 @@
 use std::fmt::{self, Debug};
 use std::io::Error as IoError;
 
-use jni::objects::{AutoLocal, GlobalRef, JObject, JString, JThrowable};
+use jni::objects::{GlobalRef, JObject, JString, JThrowable};
 use jni::{JNIEnv, JavaVM};
+use libsignal_net::cdsi::CdsiProtocolError;
+use libsignal_protocol::*;
 
 use super::*;
 use crate::net::cdsi::CdsiError;
@@ -24,42 +26,20 @@ pub struct TestingError {
 }
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
-/// no connection attempts succeeded before timeout
-pub(super) struct AllConnectionAttemptsFailed;
+/// connect timed out
+pub(super) struct ConnectTimedOut;
 
 impl SignalJniError {
-    #[cold]
     pub(super) fn to_throwable<'a>(
         &self,
         env: &mut JNIEnv<'a>,
     ) -> Result<JThrowable<'a>, BridgeLayerError> {
-        self.0.to_throwable_impl(env).or_else(|convert_error| {
-            // Recover by producing *some* throwable (AssertionError). This is particularly important
-            // for Futures, which will otherwise hang. However, if this fails, give up and return the
-            // *original* BridgeLayerError.
-            try_scoped(|| {
-                let message = env
-                    .new_string(format!(
-                        "failed to convert error \"{self}\": {convert_error}"
-                    ))
-                    .check_exceptions(env, "JniError::into_throwable")?;
-                let error_obj = new_instance(
-                    env,
-                    ClassName("java.lang.AssertionError"),
-                    jni_args!((message => java.lang.Object) -> void),
-                )?;
-                Ok(error_obj.into())
-            })
-            .map_err(|_: BridgeLayerError| convert_error)
-        })
+        self.0.to_throwable(env)
     }
 }
 
 pub(super) trait JniError: Debug + Display {
-    fn to_throwable_impl<'a>(
-        &self,
-        env: &mut JNIEnv<'a>,
-    ) -> Result<JThrowable<'a>, BridgeLayerError>;
+    fn to_throwable<'a>(&self, env: &mut JNIEnv<'a>) -> Result<JThrowable<'a>, BridgeLayerError>;
 }
 
 /// Simpler trait that provides a blanket impl of [`JniError`].
@@ -73,10 +53,7 @@ pub(super) trait MessageOnlyExceptionJniError: Debug + Display {
 }
 
 impl<M: MessageOnlyExceptionJniError> JniError for M {
-    fn to_throwable_impl<'a>(
-        &self,
-        env: &mut JNIEnv<'a>,
-    ) -> Result<JThrowable<'a>, BridgeLayerError> {
+    fn to_throwable<'a>(&self, env: &mut JNIEnv<'a>) -> Result<JThrowable<'a>, BridgeLayerError> {
         let class = self.exception_class();
         let throwable = env
             .new_string(self.to_string())
@@ -143,24 +120,6 @@ impl fmt::Display for BridgeLayerError {
     }
 }
 
-impl From<WithContext<BridgeLayerError>> for SignalProtocolError {
-    fn from(value: WithContext<BridgeLayerError>) -> Self {
-        let WithContext {
-            operation: _,
-            inner,
-        } = value;
-        match inner {
-            BridgeLayerError::BadJniParameter(m) => {
-                SignalProtocolError::InvalidArgument(m.to_string())
-            }
-            BridgeLayerError::CallbackException(callback, exception) => {
-                SignalProtocolError::ApplicationCallbackError(callback, Box::new(exception))
-            }
-            err => SignalProtocolError::FfiBindingError(err.to_string()),
-        }
-    }
-}
-
 #[cfg(feature = "signal-media")]
 impl From<signal_media::sanitize::mp4::Error> for SignalJniError {
     fn from(e: signal_media::sanitize::mp4::Error) -> Self {
@@ -187,19 +146,20 @@ impl From<libsignal_net::cdsi::LookupError> for SignalJniError {
     fn from(e: libsignal_net::cdsi::LookupError) -> SignalJniError {
         use libsignal_net::cdsi::LookupError;
         let cdsi_error = match e {
-            LookupError::AllConnectionAttemptsFailed => return AllConnectionAttemptsFailed.into(),
+            LookupError::ConnectionTimedOut => return ConnectTimedOut.into(),
             LookupError::AttestationError(e) => return e.into(),
             LookupError::ConnectTransport(e) => return IoError::from(e).into(),
             LookupError::WebSocket(e) => return e.into(),
             LookupError::InvalidArgument { server_reason: _ } => {
-                // Normally we wouldn't produce an unchecked error for something validated
-                // server-side, but getting an argument validation error for *CDS* does suggest that
-                // the operation was performed with bad arguments.
-                return IllegalArgumentError::new(e.to_string()).into();
+                return SignalProtocolError::InvalidArgument(e.to_string()).into()
             }
+            LookupError::InvalidResponse => CdsiError::InvalidResponse,
             LookupError::EnclaveProtocol(_) => CdsiError::Protocol,
-            LookupError::CdsiProtocol(inner) => CdsiError::CdsiProtocol(inner),
+            LookupError::CdsiProtocol(CdsiProtocolError::NoTokenInResponse) => {
+                CdsiError::NoTokenInResponse
+            }
             LookupError::RateLimited(retry_later) => CdsiError::RateLimited(retry_later),
+            LookupError::ParseError => CdsiError::ParseError,
             LookupError::InvalidToken => CdsiError::InvalidToken,
             LookupError::Server { reason } => CdsiError::Server { reason },
         };
@@ -243,40 +203,33 @@ impl ThrownException {
     }
 
     pub fn class_name(&self, env: &mut JNIEnv) -> Result<String, BridgeLayerError> {
-        let class_type = AutoLocal::new(
-            env.get_object_class(self.exception_ref.as_obj())
-                .check_exceptions(env, "ThrownException::class_name")?,
-            env,
-        );
-        let class_name = AutoLocal::new(
-            JString::from(call_method_checked(
-                env,
-                class_type,
-                "getCanonicalName",
-                jni_args!(() -> java.lang.String),
-            )?),
-            env,
-        );
-        let class_name_str = env
-            .get_string(&class_name)
+        let class_type = env
+            .get_object_class(self.exception_ref.as_obj())
             .check_exceptions(env, "ThrownException::class_name")?;
-        Ok(class_name_str.into())
+        let class_name: JObject = call_method_checked(
+            env,
+            class_type,
+            "getCanonicalName",
+            jni_args!(() -> java.lang.String),
+        )?;
+
+        Ok(env
+            .get_string(&JString::from(class_name))
+            .check_exceptions(env, "ThrownException::class_name")?
+            .into())
     }
 
     pub fn message(&self, env: &mut JNIEnv) -> Result<String, BridgeLayerError> {
-        let message = AutoLocal::new(
-            JString::from(call_method_checked(
-                env,
-                self.exception_ref.as_obj(),
-                "getMessage",
-                jni_args!(() -> java.lang.String),
-            )?),
+        let message: JObject = call_method_checked(
             env,
-        );
-        let message_str = env
-            .get_string(&message)
-            .check_exceptions(env, "ThrownException::message")?;
-        Ok(message_str.into())
+            self.exception_ref.as_obj(),
+            "getMessage",
+            jni_args!(() -> java.lang.String),
+        )?;
+        Ok(env
+            .get_string(&JString::from(message))
+            .check_exceptions(env, "ThrownException::class_name")?
+            .into())
     }
 }
 

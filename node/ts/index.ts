@@ -3,30 +3,26 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import { Buffer } from 'node:buffer';
-
 import * as uuid from 'uuid';
 
-import * as Errors from './Errors.js';
-export * from './Errors.js';
+import * as Errors from './Errors';
+export * from './Errors';
 
-import { Aci, ProtocolAddress, ServiceId } from './Address.js';
-export * from './Address.js';
-import { PrivateKey, PublicKey } from './EcKeys.js';
-export * from './EcKeys.js';
-import { Uuid } from './uuid.js';
-export * from './uuid.js';
+import { Aci, ProtocolAddress, ServiceId } from './Address';
+export * from './Address';
+import { PrivateKey, PublicKey } from './EcKeys';
+export * from './EcKeys';
 
-export * as usernames from './usernames.js';
+export * as usernames from './usernames';
 
-export * as io from './io.js';
+export * as io from './io';
 
-export * as Net from './net.js';
+export * as Net from './net';
 
-export * as Mp4Sanitizer from './Mp4Sanitizer.js';
-export * as WebpSanitizer from './WebpSanitizer.js';
+export * as Mp4Sanitizer from './Mp4Sanitizer';
+export * as WebpSanitizer from './WebpSanitizer';
 
-import * as Native from './Native.js';
+import * as Native from '../Native';
 
 Native.registerErrors(Errors);
 
@@ -51,23 +47,25 @@ export enum ContentHint {
   Implicit = 2,
 }
 
+export type Uuid = string;
+
 export function hkdf(
   outputLength: number,
-  keyMaterial: Uint8Array,
-  label: Uint8Array,
-  salt: Uint8Array | null
-): Uint8Array {
+  keyMaterial: Buffer,
+  label: Buffer,
+  salt: Buffer | null
+): Buffer {
   return Native.HKDF_DeriveSecrets(outputLength, keyMaterial, label, salt);
 }
 
 export class ScannableFingerprint {
-  private readonly scannable: Uint8Array;
+  private readonly scannable: Buffer;
 
-  private constructor(scannable: Uint8Array) {
+  private constructor(scannable: Buffer) {
     this.scannable = scannable;
   }
 
-  static _fromBuffer(scannable: Uint8Array): ScannableFingerprint {
+  static _fromBuffer(scannable: Buffer): ScannableFingerprint {
     return new ScannableFingerprint(scannable);
   }
 
@@ -75,7 +73,7 @@ export class ScannableFingerprint {
     return Native.ScannableFingerprint_Compare(this.scannable, other.scannable);
   }
 
-  toBuffer(): Uint8Array {
+  toBuffer(): Buffer {
     return this.scannable;
   }
 }
@@ -106,9 +104,9 @@ export class Fingerprint {
   static new(
     iterations: number,
     version: number,
-    localIdentifier: Uint8Array,
+    localIdentifier: Buffer,
     localKey: PublicKey,
-    remoteIdentifier: Uint8Array,
+    remoteIdentifier: Buffer,
     remoteKey: PublicKey
   ): Fingerprint {
     return new Fingerprint(
@@ -136,56 +134,23 @@ export class Fingerprint {
   }
 }
 
-/**
- * Implements the <a href="https://en.wikipedia.org/wiki/AES-GCM-SIV">AES-256-GCM-SIV</a>
- * authenticated stream cipher with a 12-byte nonce.
- *
- * AES-GCM-SIV is a multi-pass algorithm (to generate the "synthetic initialization vector"), so
- * this API does not expose a streaming form.
- */
 export class Aes256GcmSiv {
   readonly _nativeHandle: Native.Aes256GcmSiv;
 
-  private constructor(key: Uint8Array) {
+  private constructor(key: Buffer) {
     this._nativeHandle = Native.Aes256GcmSiv_New(key);
   }
 
-  static new(key: Uint8Array): Aes256GcmSiv {
+  static new(key: Buffer): Aes256GcmSiv {
     return new Aes256GcmSiv(key);
   }
 
-  /**
-   * Encrypts the given plaintext using the given nonce, and authenticating the ciphertext and given
-   * associated data.
-   *
-   * The associated data is not included in the ciphertext; instead, it's expected to match between
-   * the encrypter and decrypter. If you don't need any extra data, pass an empty array.
-   *
-   * @returns The encrypted data, including an appended 16-byte authentication tag.
-   */
-  encrypt(
-    message: Uint8Array,
-    nonce: Uint8Array,
-    associatedData: Uint8Array
-  ): Uint8Array {
-    return Native.Aes256GcmSiv_Encrypt(this, message, nonce, associatedData);
+  encrypt(message: Buffer, nonce: Buffer, associated_data: Buffer): Buffer {
+    return Native.Aes256GcmSiv_Encrypt(this, message, nonce, associated_data);
   }
 
-  /**
-   * Decrypts the given ciphertext using the given nonce, and authenticating the ciphertext and given
-   * associated data.
-   *
-   * The associated data is not included in the ciphertext; instead, it's expected to match between
-   * the encrypter and decrypter.
-   *
-   * @returns The decrypted data
-   */
-  decrypt(
-    message: Uint8Array,
-    nonce: Uint8Array,
-    associatedData: Uint8Array
-  ): Uint8Array {
-    return Native.Aes256GcmSiv_Decrypt(this, message, nonce, associatedData);
+  decrypt(message: Buffer, nonce: Buffer, associated_data: Buffer): Buffer {
+    return Native.Aes256GcmSiv_Decrypt(this, message, nonce, associated_data);
   }
 }
 
@@ -200,11 +165,11 @@ export class KEMPublicKey {
     return new KEMPublicKey(handle);
   }
 
-  static deserialize(buf: Uint8Array): KEMPublicKey {
+  static deserialize(buf: Buffer): KEMPublicKey {
     return new KEMPublicKey(Native.KyberPublicKey_Deserialize(buf));
   }
 
-  serialize(): Uint8Array {
+  serialize(): Buffer {
     return Native.KyberPublicKey_Serialize(this);
   }
 }
@@ -220,11 +185,11 @@ export class KEMSecretKey {
     return new KEMSecretKey(handle);
   }
 
-  static deserialize(buf: Uint8Array): KEMSecretKey {
+  static deserialize(buf: Buffer): KEMSecretKey {
     return new KEMSecretKey(Native.KyberSecretKey_Deserialize(buf));
   }
 
-  serialize(): Uint8Array {
+  serialize(): Buffer {
     return Native.KyberSecretKey_Serialize(this);
   }
 }
@@ -259,16 +224,16 @@ export class KEMKeyPair {
 
 /** The public information contained in a {@link SignedPreKeyRecord} */
 export type SignedPublicPreKey = {
-  id: () => number;
-  publicKey: () => PublicKey;
-  signature: () => Uint8Array;
+  id(): number;
+  publicKey(): PublicKey;
+  signature(): Buffer;
 };
 
 /** The public information contained in a {@link KyberPreKeyRecord} */
 export type SignedKyberPublicPreKey = {
-  id: () => number;
-  publicKey: () => KEMPublicKey;
-  signature: () => Uint8Array;
+  id(): number;
+  publicKey(): KEMPublicKey;
+  signature(): Buffer;
 };
 
 export class PreKeyBundle {
@@ -285,11 +250,11 @@ export class PreKeyBundle {
     prekey: PublicKey | null,
     signed_prekey_id: number,
     signed_prekey: PublicKey,
-    signed_prekey_signature: Uint8Array,
+    signed_prekey_signature: Buffer,
     identity_key: PublicKey,
     kyber_prekey_id: number,
     kyber_prekey: KEMPublicKey,
-    kyber_prekey_signature: Uint8Array
+    kyber_prekey_signature: Buffer
   ): PreKeyBundle {
     return new PreKeyBundle(
       Native.PreKeyBundle_New(
@@ -339,7 +304,7 @@ export class PreKeyBundle {
       Native.PreKeyBundle_GetSignedPreKeyPublic(this)
     );
   }
-  signedPreKeySignature(): Uint8Array {
+  signedPreKeySignature(): Buffer {
     return Native.PreKeyBundle_GetSignedPreKeySignature(this);
   }
 
@@ -353,7 +318,7 @@ export class PreKeyBundle {
     );
   }
 
-  kyberPreKeySignature(): Uint8Array {
+  kyberPreKeySignature(): Buffer {
     return Native.PreKeyBundle_GetKyberPreKeySignature(this);
   }
 }
@@ -373,7 +338,7 @@ export class PreKeyRecord {
     return new PreKeyRecord(Native.PreKeyRecord_New(id, pubKey, privKey));
   }
 
-  static deserialize(buffer: Uint8Array): PreKeyRecord {
+  static deserialize(buffer: Buffer): PreKeyRecord {
     return new PreKeyRecord(Native.PreKeyRecord_Deserialize(buffer));
   }
 
@@ -391,7 +356,7 @@ export class PreKeyRecord {
     return PublicKey._fromNativeHandle(Native.PreKeyRecord_GetPublicKey(this));
   }
 
-  serialize(): Uint8Array {
+  serialize(): Buffer {
     return Native.PreKeyRecord_Serialize(this);
   }
 }
@@ -414,14 +379,14 @@ export class SignedPreKeyRecord implements SignedPublicPreKey {
     timestamp: number,
     pubKey: PublicKey,
     privKey: PrivateKey,
-    signature: Uint8Array
+    signature: Buffer
   ): SignedPreKeyRecord {
     return new SignedPreKeyRecord(
       Native.SignedPreKeyRecord_New(id, timestamp, pubKey, privKey, signature)
     );
   }
 
-  static deserialize(buffer: Uint8Array): SignedPreKeyRecord {
+  static deserialize(buffer: Buffer): SignedPreKeyRecord {
     return new SignedPreKeyRecord(
       Native.SignedPreKeyRecord_Deserialize(buffer)
     );
@@ -443,11 +408,11 @@ export class SignedPreKeyRecord implements SignedPublicPreKey {
     );
   }
 
-  serialize(): Uint8Array {
+  serialize(): Buffer {
     return Native.SignedPreKeyRecord_Serialize(this);
   }
 
-  signature(): Uint8Array {
+  signature(): Buffer {
     return Native.SignedPreKeyRecord_GetSignature(this);
   }
 
@@ -473,18 +438,18 @@ export class KyberPreKeyRecord implements SignedKyberPublicPreKey {
     id: number,
     timestamp: number,
     keyPair: KEMKeyPair,
-    signature: Uint8Array
+    signature: Buffer
   ): KyberPreKeyRecord {
     return new KyberPreKeyRecord(
       Native.KyberPreKeyRecord_New(id, timestamp, keyPair, signature)
     );
   }
 
-  serialize(): Uint8Array {
+  serialize(): Buffer {
     return Native.KyberPreKeyRecord_Serialize(this);
   }
 
-  static deserialize(buffer: Uint8Array): KyberPreKeyRecord {
+  static deserialize(buffer: Buffer): KyberPreKeyRecord {
     return new KyberPreKeyRecord(Native.KyberPreKeyRecord_Deserialize(buffer));
   }
 
@@ -510,7 +475,7 @@ export class KyberPreKeyRecord implements SignedKyberPublicPreKey {
     );
   }
 
-  signature(): Uint8Array {
+  signature(): Buffer {
     return Native.KyberPreKeyRecord_GetSignature(this);
   }
 
@@ -528,14 +493,13 @@ export class SignalMessage {
 
   static _new(
     messageVersion: number,
-    macKey: Uint8Array,
+    macKey: Buffer,
     senderRatchetKey: PublicKey,
     counter: number,
     previousCounter: number,
-    ciphertext: Uint8Array,
+    ciphertext: Buffer,
     senderIdentityKey: PublicKey,
-    receiverIdentityKey: PublicKey,
-    pqRatchet: Uint8Array
+    receiverIdentityKey: PublicKey
   ): SignalMessage {
     return new SignalMessage(
       Native.SignalMessage_New(
@@ -546,22 +510,17 @@ export class SignalMessage {
         previousCounter,
         ciphertext,
         senderIdentityKey,
-        receiverIdentityKey,
-        pqRatchet
+        receiverIdentityKey
       )
     );
   }
 
-  static deserialize(buffer: Uint8Array): SignalMessage {
+  static deserialize(buffer: Buffer): SignalMessage {
     return new SignalMessage(Native.SignalMessage_Deserialize(buffer));
   }
 
-  body(): Uint8Array {
+  body(): Buffer {
     return Native.SignalMessage_GetBody(this);
-  }
-
-  pqRatchet(): Uint8Array {
-    return Native.SignalMessage_GetPqRatchet(this);
   }
 
   counter(): number {
@@ -572,14 +531,14 @@ export class SignalMessage {
     return Native.SignalMessage_GetMessageVersion(this);
   }
 
-  serialize(): Uint8Array {
+  serialize(): Buffer {
     return Native.SignalMessage_GetSerialized(this);
   }
 
   verifyMac(
     senderIdentityKey: PublicKey,
     recevierIdentityKey: PublicKey,
-    macKey: Uint8Array
+    macKey: Buffer
   ): boolean {
     return Native.SignalMessage_VerifyMac(
       this,
@@ -619,7 +578,7 @@ export class PreKeySignalMessage {
     );
   }
 
-  static deserialize(buffer: Uint8Array): PreKeySignalMessage {
+  static deserialize(buffer: Buffer): PreKeySignalMessage {
     return new PreKeySignalMessage(
       Native.PreKeySignalMessage_Deserialize(buffer)
     );
@@ -641,7 +600,7 @@ export class PreKeySignalMessage {
     return Native.PreKeySignalMessage_GetVersion(this);
   }
 
-  serialize(): Uint8Array {
+  serialize(): Buffer {
     return Native.PreKeySignalMessage_Serialize(this);
   }
 }
@@ -657,11 +616,11 @@ export class SessionRecord {
     return new SessionRecord(nativeHandle);
   }
 
-  static deserialize(buffer: Uint8Array): SessionRecord {
+  static deserialize(buffer: Buffer): SessionRecord {
     return new SessionRecord(Native.SessionRecord_Deserialize(buffer));
   }
 
-  serialize(): Uint8Array {
+  serialize(): Buffer {
     return Native.SessionRecord_Serialize(this);
   }
 
@@ -714,11 +673,11 @@ export class ServerCertificate {
     );
   }
 
-  static deserialize(buffer: Uint8Array): ServerCertificate {
+  static deserialize(buffer: Buffer): ServerCertificate {
     return new ServerCertificate(Native.ServerCertificate_Deserialize(buffer));
   }
 
-  certificateData(): Uint8Array {
+  certificateData(): Buffer {
     return Native.ServerCertificate_GetCertificate(this);
   }
 
@@ -730,11 +689,11 @@ export class ServerCertificate {
     return Native.ServerCertificate_GetKeyId(this);
   }
 
-  serialize(): Uint8Array {
+  serialize(): Buffer {
     return Native.ServerCertificate_GetSerialized(this);
   }
 
-  signature(): Uint8Array {
+  signature(): Buffer {
     return Native.ServerCertificate_GetSignature(this);
   }
 }
@@ -752,11 +711,11 @@ export class SenderKeyRecord {
     this._nativeHandle = nativeHandle;
   }
 
-  static deserialize(buffer: Uint8Array): SenderKeyRecord {
+  static deserialize(buffer: Buffer): SenderKeyRecord {
     return new SenderKeyRecord(Native.SenderKeyRecord_Deserialize(buffer));
   }
 
-  serialize(): Uint8Array {
+  serialize(): Buffer {
     return Native.SenderKeyRecord_Serialize(this);
   }
 }
@@ -799,15 +758,15 @@ export class SenderCertificate {
     );
   }
 
-  static deserialize(buffer: Uint8Array): SenderCertificate {
+  static deserialize(buffer: Buffer): SenderCertificate {
     return new SenderCertificate(Native.SenderCertificate_Deserialize(buffer));
   }
 
-  serialize(): Uint8Array {
+  serialize(): Buffer {
     return Native.SenderCertificate_GetSerialized(this);
   }
 
-  certificate(): Uint8Array {
+  certificate(): Buffer {
     return Native.SenderCertificate_GetCertificate(this);
   }
   expiration(): number {
@@ -842,29 +801,11 @@ export class SenderCertificate {
       Native.SenderCertificate_GetServerCertificate(this)
     );
   }
-  signature(): Uint8Array {
+  signature(): Buffer {
     return Native.SenderCertificate_GetSignature(this);
   }
-
-  /**
-   * Validates `this` against the given trust root at the given current time.
-   *
-   * @see validateWithTrustRoots
-   */
   validate(trustRoot: PublicKey, time: number): boolean {
-    return Native.SenderCertificate_Validate(this, [trustRoot], time);
-  }
-
-  /**
-   * Validates `this` against the given trust roots at the given current time.
-   *
-   * Checks the certificate against each key in `trustRoots` in constant time (that is, no result
-   * is produced until every key is checked), making sure **one** of them has signed its embedded
-   * server certificate. The `time` parameter is compared numerically against ``expiration``, and
-   * is not required to use any specific units, but Signal uses milliseconds since 1970.
-   */
-  validateWithTrustRoots(trustRoots: PublicKey[], time: number): boolean {
-    return Native.SenderCertificate_Validate(this, trustRoots, time);
+    return Native.SenderCertificate_Validate(this, trustRoot, time);
   }
 }
 
@@ -882,7 +823,7 @@ export class SenderKeyDistributionMessage {
   ): Promise<SenderKeyDistributionMessage> {
     const handle = await Native.SenderKeyDistributionMessage_Create(
       sender,
-      uuid.parse(distributionId),
+      Buffer.from(uuid.parse(distributionId)),
       store
     );
     return new SenderKeyDistributionMessage(handle);
@@ -893,13 +834,13 @@ export class SenderKeyDistributionMessage {
     distributionId: Uuid,
     chainId: number,
     iteration: number,
-    chainKey: Uint8Array,
+    chainKey: Buffer,
     pk: PublicKey
   ): SenderKeyDistributionMessage {
     return new SenderKeyDistributionMessage(
       Native.SenderKeyDistributionMessage_New(
         messageVersion,
-        uuid.parse(distributionId),
+        Buffer.from(uuid.parse(distributionId)),
         chainId,
         iteration,
         chainKey,
@@ -908,17 +849,17 @@ export class SenderKeyDistributionMessage {
     );
   }
 
-  static deserialize(buffer: Uint8Array): SenderKeyDistributionMessage {
+  static deserialize(buffer: Buffer): SenderKeyDistributionMessage {
     return new SenderKeyDistributionMessage(
       Native.SenderKeyDistributionMessage_Deserialize(buffer)
     );
   }
 
-  serialize(): Uint8Array {
+  serialize(): Buffer {
     return Native.SenderKeyDistributionMessage_Serialize(this);
   }
 
-  chainKey(): Uint8Array {
+  chainKey(): Buffer {
     return Native.SenderKeyDistributionMessage_GetChainKey(this);
   }
 
@@ -957,13 +898,13 @@ export class SenderKeyMessage {
     distributionId: Uuid,
     chainId: number,
     iteration: number,
-    ciphertext: Uint8Array,
+    ciphertext: Buffer,
     pk: PrivateKey
   ): SenderKeyMessage {
     return new SenderKeyMessage(
       Native.SenderKeyMessage_New(
         messageVersion,
-        uuid.parse(distributionId),
+        Buffer.from(uuid.parse(distributionId)),
         chainId,
         iteration,
         ciphertext,
@@ -972,15 +913,15 @@ export class SenderKeyMessage {
     );
   }
 
-  static deserialize(buffer: Uint8Array): SenderKeyMessage {
+  static deserialize(buffer: Buffer): SenderKeyMessage {
     return new SenderKeyMessage(Native.SenderKeyMessage_Deserialize(buffer));
   }
 
-  serialize(): Uint8Array {
+  serialize(): Buffer {
     return Native.SenderKeyMessage_Serialize(this);
   }
 
-  ciphertext(): Uint8Array {
+  ciphertext(): Buffer {
     return Native.SenderKeyMessage_GetCipherText(this);
   }
 
@@ -1018,7 +959,7 @@ export class UnidentifiedSenderMessageContent {
     message: CiphertextMessage,
     sender: SenderCertificate,
     contentHint: number,
-    groupId: Uint8Array | null
+    groupId: Buffer | null
   ): UnidentifiedSenderMessageContent {
     return new UnidentifiedSenderMessageContent(
       Native.UnidentifiedSenderMessageContent_New(
@@ -1030,17 +971,17 @@ export class UnidentifiedSenderMessageContent {
     );
   }
 
-  static deserialize(buffer: Uint8Array): UnidentifiedSenderMessageContent {
+  static deserialize(buffer: Buffer): UnidentifiedSenderMessageContent {
     return new UnidentifiedSenderMessageContent(
       Native.UnidentifiedSenderMessageContent_Deserialize(buffer)
     );
   }
 
-  serialize(): Uint8Array {
+  serialize(): Buffer {
     return Native.UnidentifiedSenderMessageContent_Serialize(this);
   }
 
-  contents(): Uint8Array {
+  contents(): Buffer {
     return Native.UnidentifiedSenderMessageContent_GetContents(this);
   }
 
@@ -1058,7 +999,7 @@ export class UnidentifiedSenderMessageContent {
     return Native.UnidentifiedSenderMessageContent_GetContentHint(this);
   }
 
-  groupId(): Uint8Array | null {
+  groupId(): Buffer | null {
     return Native.UnidentifiedSenderMessageContent_GetGroupId(this);
   }
 }
@@ -1156,13 +1097,38 @@ export abstract class IdentityKeyStore implements Native.IdentityKeyStore {
   abstract getIdentity(name: ProtocolAddress): Promise<PublicKey | null>;
 }
 
-export abstract class PreKeyStore {
+export abstract class PreKeyStore implements Native.PreKeyStore {
+  async _savePreKey(id: number, record: Native.PreKeyRecord): Promise<void> {
+    return this.savePreKey(id, PreKeyRecord._fromNativeHandle(record));
+  }
+  async _getPreKey(id: number): Promise<Native.PreKeyRecord> {
+    const pk = await this.getPreKey(id);
+    return pk._nativeHandle;
+  }
+  async _removePreKey(id: number): Promise<void> {
+    return this.removePreKey(id);
+  }
+
   abstract savePreKey(id: number, record: PreKeyRecord): Promise<void>;
   abstract getPreKey(id: number): Promise<PreKeyRecord>;
   abstract removePreKey(id: number): Promise<void>;
 }
 
-export abstract class SignedPreKeyStore {
+export abstract class SignedPreKeyStore implements Native.SignedPreKeyStore {
+  async _saveSignedPreKey(
+    id: number,
+    record: Native.SignedPreKeyRecord
+  ): Promise<void> {
+    return this.saveSignedPreKey(
+      id,
+      SignedPreKeyRecord._fromNativeHandle(record)
+    );
+  }
+  async _getSignedPreKey(id: number): Promise<Native.SignedPreKeyRecord> {
+    const pk = await this.getSignedPreKey(id);
+    return pk._nativeHandle;
+  }
+
   abstract saveSignedPreKey(
     id: number,
     record: SignedPreKeyRecord
@@ -1170,17 +1136,33 @@ export abstract class SignedPreKeyStore {
   abstract getSignedPreKey(id: number): Promise<SignedPreKeyRecord>;
 }
 
-export abstract class KyberPreKeyStore {
+export abstract class KyberPreKeyStore implements Native.KyberPreKeyStore {
+  async _saveKyberPreKey(
+    kyberPreKeyId: number,
+    record: Native.KyberPreKeyRecord
+  ): Promise<void> {
+    return this.saveKyberPreKey(
+      kyberPreKeyId,
+      KyberPreKeyRecord._fromNativeHandle(record)
+    );
+  }
+  async _getKyberPreKey(
+    kyberPreKeyId: number
+  ): Promise<Native.KyberPreKeyRecord> {
+    const prekey = await this.getKyberPreKey(kyberPreKeyId);
+    return prekey._nativeHandle;
+  }
+
+  async _markKyberPreKeyUsed(kyberPreKeyId: number): Promise<void> {
+    return this.markKyberPreKeyUsed(kyberPreKeyId);
+  }
+
   abstract saveKyberPreKey(
     kyberPreKeyId: number,
     record: KyberPreKeyRecord
   ): Promise<void>;
   abstract getKyberPreKey(kyberPreKeyId: number): Promise<KyberPreKeyRecord>;
-  abstract markKyberPreKeyUsed(
-    kyberPreKeyId: number,
-    signedPreKeyId: number,
-    baseKey: PublicKey
-  ): Promise<void>;
+  abstract markKyberPreKeyUsed(kyberPreKeyId: number): Promise<void>;
 }
 
 export abstract class SenderKeyStore implements Native.SenderKeyStore {
@@ -1225,12 +1207,12 @@ export async function groupEncrypt(
   sender: ProtocolAddress,
   distributionId: Uuid,
   store: SenderKeyStore,
-  message: Uint8Array
+  message: Buffer
 ): Promise<CiphertextMessage> {
   return CiphertextMessage._fromNativeHandle(
     await Native.GroupCipher_EncryptMessage(
       sender,
-      uuid.parse(distributionId),
+      Buffer.from(uuid.parse(distributionId)),
       message,
       store
     )
@@ -1240,8 +1222,8 @@ export async function groupEncrypt(
 export async function groupDecrypt(
   sender: ProtocolAddress,
   store: SenderKeyStore,
-  message: Uint8Array
-): Promise<Uint8Array> {
+  message: Buffer
+): Promise<Buffer> {
   return Native.GroupCipher_DecryptMessage(sender, message, store);
 }
 
@@ -1258,7 +1240,7 @@ export class SealedSenderDecryptionResult {
     return new SealedSenderDecryptionResult(nativeHandle);
   }
 
-  message(): Uint8Array {
+  message(): Buffer {
     return Native.SealedSenderDecryptionResult_Message(this);
   }
 
@@ -1289,7 +1271,7 @@ export class SealedSenderDecryptionResult {
 }
 
 export interface CiphertextMessageConvertible {
-  asCiphertextMessage: () => CiphertextMessage;
+  asCiphertextMessage(): CiphertextMessage;
 }
 
 export class CiphertextMessage {
@@ -1309,7 +1291,7 @@ export class CiphertextMessage {
     return message.asCiphertextMessage();
   }
 
-  serialize(): Uint8Array {
+  serialize(): Buffer {
     return Native.CiphertextMessage_Serialize(this);
   }
 
@@ -1325,7 +1307,7 @@ export class PlaintextContent implements CiphertextMessageConvertible {
     this._nativeHandle = nativeHandle;
   }
 
-  static deserialize(buffer: Uint8Array): PlaintextContent {
+  static deserialize(buffer: Buffer): PlaintextContent {
     return new PlaintextContent(Native.PlaintextContent_Deserialize(buffer));
   }
 
@@ -1335,11 +1317,11 @@ export class PlaintextContent implements CiphertextMessageConvertible {
     );
   }
 
-  serialize(): Uint8Array {
+  serialize(): Buffer {
     return Native.PlaintextContent_Serialize(this);
   }
 
-  body(): Uint8Array {
+  body(): Buffer {
     return Native.PlaintextContent_GetBody(this);
   }
 
@@ -1364,7 +1346,7 @@ export class DecryptionErrorMessage {
   }
 
   static forOriginal(
-    bytes: Uint8Array,
+    bytes: Buffer,
     type: CiphertextMessageType,
     timestamp: number,
     originalSenderDeviceId: number
@@ -1379,19 +1361,19 @@ export class DecryptionErrorMessage {
     );
   }
 
-  static deserialize(buffer: Uint8Array): DecryptionErrorMessage {
+  static deserialize(buffer: Buffer): DecryptionErrorMessage {
     return new DecryptionErrorMessage(
       Native.DecryptionErrorMessage_Deserialize(buffer)
     );
   }
 
-  static extractFromSerializedBody(buffer: Uint8Array): DecryptionErrorMessage {
+  static extractFromSerializedBody(buffer: Buffer): DecryptionErrorMessage {
     return new DecryptionErrorMessage(
       Native.DecryptionErrorMessage_ExtractFromSerializedContent(buffer)
     );
   }
 
-  serialize(): Uint8Array {
+  serialize(): Buffer {
     return Native.DecryptionErrorMessage_Serialize(this);
   }
 
@@ -1430,7 +1412,7 @@ export function processPreKeyBundle(
 }
 
 export async function signalEncrypt(
-  message: Uint8Array,
+  message: Buffer,
   address: ProtocolAddress,
   sessionStore: SessionStore,
   identityStore: IdentityKeyStore,
@@ -1452,79 +1434,13 @@ export function signalDecrypt(
   address: ProtocolAddress,
   sessionStore: SessionStore,
   identityStore: IdentityKeyStore
-): Promise<Uint8Array> {
+): Promise<Buffer> {
   return Native.SessionCipher_DecryptSignalMessage(
     message,
     address,
     sessionStore,
     identityStore
   );
-}
-
-function bridgePreKeyStore(store: PreKeyStore): Native.BridgePreKeyStore {
-  return {
-    async storePreKey(id: number, record: Native.PreKeyRecord): Promise<void> {
-      return store.savePreKey(id, PreKeyRecord._fromNativeHandle(record));
-    },
-    async loadPreKey(id: number): Promise<Native.PreKeyRecord> {
-      const pk = await store.getPreKey(id);
-      return pk._nativeHandle;
-    },
-    async removePreKey(id: number): Promise<void> {
-      return store.removePreKey(id);
-    },
-  };
-}
-
-function bridgeSignedPreKeyStore(
-  store: SignedPreKeyStore
-): Native.BridgeSignedPreKeyStore {
-  return {
-    async storeSignedPreKey(
-      id: number,
-      record: Native.SignedPreKeyRecord
-    ): Promise<void> {
-      return store.saveSignedPreKey(
-        id,
-        SignedPreKeyRecord._fromNativeHandle(record)
-      );
-    },
-    async loadSignedPreKey(id: number): Promise<Native.SignedPreKeyRecord> {
-      const pk = await store.getSignedPreKey(id);
-      return pk._nativeHandle;
-    },
-  };
-}
-
-function bridgeKyberPreKeyStore(
-  store: KyberPreKeyStore
-): Native.BridgeKyberPreKeyStore {
-  return {
-    async storeKyberPreKey(
-      id: number,
-      record: Native.KyberPreKeyRecord
-    ): Promise<void> {
-      return store.saveKyberPreKey(
-        id,
-        KyberPreKeyRecord._fromNativeHandle(record)
-      );
-    },
-    async loadKyberPreKey(id: number): Promise<Native.KyberPreKeyRecord> {
-      const pk = await store.getKyberPreKey(id);
-      return pk._nativeHandle;
-    },
-    async markKyberPreKeyUsed(
-      id: number,
-      ecPrekeyId: number,
-      baseKey: Native.PublicKey
-    ): Promise<void> {
-      return store.markKyberPreKeyUsed(
-        id,
-        ecPrekeyId,
-        PublicKey._fromNativeHandle(baseKey)
-      );
-    },
-  };
 }
 
 export function signalDecryptPreKey(
@@ -1535,25 +1451,25 @@ export function signalDecryptPreKey(
   prekeyStore: PreKeyStore,
   signedPrekeyStore: SignedPreKeyStore,
   kyberPrekeyStore: KyberPreKeyStore
-): Promise<Uint8Array> {
+): Promise<Buffer> {
   return Native.SessionCipher_DecryptPreKeySignalMessage(
     message,
     address,
     sessionStore,
     identityStore,
-    bridgePreKeyStore(prekeyStore),
-    bridgeSignedPreKeyStore(signedPrekeyStore),
-    bridgeKyberPreKeyStore(kyberPrekeyStore)
+    prekeyStore,
+    signedPrekeyStore,
+    kyberPrekeyStore
   );
 }
 
 export async function sealedSenderEncryptMessage(
-  message: Uint8Array,
+  message: Buffer,
   address: ProtocolAddress,
   senderCert: SenderCertificate,
   sessionStore: SessionStore,
   identityStore: IdentityKeyStore
-): Promise<Uint8Array> {
+): Promise<Buffer> {
   const ciphertext = await signalEncrypt(
     message,
     address,
@@ -1573,7 +1489,7 @@ export function sealedSenderEncrypt(
   content: UnidentifiedSenderMessageContent,
   address: ProtocolAddress,
   identityStore: IdentityKeyStore
-): Promise<Uint8Array> {
+): Promise<Buffer> {
   return Native.SealedSender_Encrypt(address, content, identityStore);
 }
 
@@ -1587,13 +1503,13 @@ export type SealedSenderMultiRecipientEncryptOptions = {
 
 export async function sealedSenderMultiRecipientEncrypt(
   options: SealedSenderMultiRecipientEncryptOptions
-): Promise<Uint8Array>;
+): Promise<Buffer>;
 export async function sealedSenderMultiRecipientEncrypt(
   content: UnidentifiedSenderMessageContent,
   recipients: ProtocolAddress[],
   identityStore: IdentityKeyStore,
   sessionStore: SessionStore
-): Promise<Uint8Array>;
+): Promise<Buffer>;
 
 export async function sealedSenderMultiRecipientEncrypt(
   contentOrOptions:
@@ -1602,7 +1518,7 @@ export async function sealedSenderMultiRecipientEncrypt(
   recipients?: ProtocolAddress[],
   identityStore?: IdentityKeyStore,
   sessionStore?: SessionStore
-): Promise<Uint8Array> {
+): Promise<Buffer> {
   let excludedRecipients: ServiceId[] | undefined = undefined;
   if (contentOrOptions instanceof UnidentifiedSenderMessageContent) {
     if (!recipients || !identityStore || !sessionStore) {
@@ -1630,13 +1546,13 @@ export async function sealedSenderMultiRecipientEncrypt(
 
 // For testing only
 export function sealedSenderMultiRecipientMessageForSingleRecipient(
-  message: Uint8Array
-): Uint8Array {
+  message: Buffer
+): Buffer {
   return Native.SealedSender_MultiRecipientMessageForSingleRecipient(message);
 }
 
 export async function sealedSenderDecryptMessage(
-  message: Uint8Array,
+  message: Buffer,
   trustRoot: PublicKey,
   timestamp: number,
   localE164: string | null,
@@ -1657,15 +1573,15 @@ export async function sealedSenderDecryptMessage(
     localDeviceId,
     sessionStore,
     identityStore,
-    bridgePreKeyStore(prekeyStore),
-    bridgeSignedPreKeyStore(signedPrekeyStore),
-    bridgeKyberPreKeyStore(kyberPrekeyStore)
+    prekeyStore,
+    signedPrekeyStore,
+    kyberPrekeyStore
   );
   return SealedSenderDecryptionResult._fromNativeHandle(ssdr);
 }
 
 export async function sealedSenderDecryptToUsmc(
-  message: Uint8Array,
+  message: Buffer,
   identityStore: IdentityKeyStore
 ): Promise<UnidentifiedSenderMessageContent> {
   const usmc = await Native.SealedSender_DecryptToUsmc(message, identityStore);
@@ -1680,8 +1596,8 @@ export class Cds2Client {
   }
 
   static new(
-    mrenclave: Uint8Array,
-    attestationMsg: Uint8Array,
+    mrenclave: Buffer,
+    attestationMsg: Buffer,
     currentTimestamp: Date
   ): Cds2Client {
     return new Cds2Client(
@@ -1693,19 +1609,19 @@ export class Cds2Client {
     );
   }
 
-  initialRequest(): Uint8Array {
+  initialRequest(): Buffer {
     return Native.SgxClientState_InitialRequest(this);
   }
 
-  completeHandshake(buffer: Uint8Array): void {
+  completeHandshake(buffer: Buffer): void {
     return Native.SgxClientState_CompleteHandshake(this, buffer);
   }
 
-  establishedSend(buffer: Uint8Array): Uint8Array {
+  establishedSend(buffer: Buffer): Buffer {
     return Native.SgxClientState_EstablishedSend(this, buffer);
   }
 
-  establishedRecv(buffer: Uint8Array): Uint8Array {
+  establishedRecv(buffer: Buffer): Buffer {
     return Native.SgxClientState_EstablishedRecv(this, buffer);
   }
 }
@@ -1717,10 +1633,7 @@ export class HsmEnclaveClient {
     this._nativeHandle = nativeHandle;
   }
 
-  static new(
-    public_key: Uint8Array,
-    code_hashes: Uint8Array[]
-  ): HsmEnclaveClient {
+  static new(public_key: Buffer, code_hashes: Buffer[]): HsmEnclaveClient {
     code_hashes.forEach((hash) => {
       if (hash.length != 32) {
         throw new Error('code hash length must be 32');
@@ -1733,19 +1646,19 @@ export class HsmEnclaveClient {
     );
   }
 
-  initialRequest(): Uint8Array {
+  initialRequest(): Buffer {
     return Native.HsmEnclaveClient_InitialRequest(this);
   }
 
-  completeHandshake(buffer: Uint8Array): void {
+  completeHandshake(buffer: Buffer): void {
     return Native.HsmEnclaveClient_CompleteHandshake(this, buffer);
   }
 
-  establishedSend(buffer: Uint8Array): Uint8Array {
+  establishedSend(buffer: Buffer): Buffer {
     return Native.HsmEnclaveClient_EstablishedSend(this, buffer);
   }
 
-  establishedRecv(buffer: Uint8Array): Uint8Array {
+  establishedRecv(buffer: Buffer): Buffer {
     return Native.HsmEnclaveClient_EstablishedRecv(this, buffer);
   }
 }

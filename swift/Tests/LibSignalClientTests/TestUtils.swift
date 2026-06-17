@@ -3,9 +3,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import XCTest
-
 @testable import LibSignalClient
+import XCTest
 
 class BadStore: InMemorySignalProtocolStore {
     enum Error: Swift.Error {
@@ -18,7 +17,7 @@ class BadStore: InMemorySignalProtocolStore {
 }
 
 // Wrapped here so that the test files don't need to use @testable import.
-func sealedSenderMultiRecipientMessageForSingleRecipient(_ message: Data) throws -> Data {
+func sealedSenderMultiRecipientMessageForSingleRecipient(_ message: [UInt8]) throws -> [UInt8] {
     return try LibSignalClient.sealedSenderMultiRecipientMessageForSingleRecipient(message)
 }
 
@@ -58,23 +57,6 @@ extension RangeReplaceableCollection where Element == UInt8 {
             self.append(byte)
             from = to
         }
-    }
-}
-
-// Helper for async error assertions until XCTest supports async autoclosures
-// Adapted from https://arturgruchala.com/testing-async-await-exceptions/
-func assertThrowsErrorAsync<T>(
-    _ expression: () async throws -> T,
-    _ message: @autoclosure () -> String = "",
-    file: StaticString = #filePath,
-    line: UInt = #line,
-    errorHandler: (Error) -> Void = { _ in }
-) async {
-    do {
-        _ = try await expression()
-        XCTFail(message().isEmpty ? "Expected error to be thrown" : message(), file: file, line: line)
-    } catch {
-        errorHandler(error)
     }
 }
 

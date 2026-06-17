@@ -6,7 +6,7 @@
 use std::hint::black_box;
 use std::time::SystemTime;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use futures_util::FutureExt;
 use libsignal_protocol::*;
 use rand::rngs::OsRng;
@@ -19,14 +19,10 @@ mod support;
 pub fn v1(c: &mut Criterion) {
     let mut rng = OsRng.unwrap_err();
 
-    let alice_address = ProtocolAddress::new(
-        "9d0652a3-dcc3-4d11-975f-74d61598733f".to_owned(),
-        DeviceId::new(1).unwrap(),
-    );
-    let bob_address = ProtocolAddress::new(
-        "796abedb-ca4e-4f18-8803-1fde5b921f9f".to_owned(),
-        DeviceId::new(1).unwrap(),
-    );
+    let alice_address =
+        ProtocolAddress::new("9d0652a3-dcc3-4d11-975f-74d61598733f".to_owned(), 1.into());
+    let bob_address =
+        ProtocolAddress::new("796abedb-ca4e-4f18-8803-1fde5b921f9f".to_owned(), 1.into());
 
     let mut alice_store = support::test_in_memory_protocol_store().expect("brand new store");
     let mut bob_store = support::test_in_memory_protocol_store().expect("brand new store");
@@ -116,14 +112,10 @@ pub fn v1(c: &mut Criterion) {
 pub fn v2(c: &mut Criterion) {
     let mut rng = OsRng.unwrap_err();
 
-    let alice_address = ProtocolAddress::new(
-        "9d0652a3-dcc3-4d11-975f-74d61598733f".to_owned(),
-        DeviceId::new(1).unwrap(),
-    );
-    let bob_address = ProtocolAddress::new(
-        "796abedb-ca4e-4f18-8803-1fde5b921f9f".to_owned(),
-        DeviceId::new(1).unwrap(),
-    );
+    let alice_address =
+        ProtocolAddress::new("9d0652a3-dcc3-4d11-975f-74d61598733f".to_owned(), 1.into());
+    let bob_address =
+        ProtocolAddress::new("796abedb-ca4e-4f18-8803-1fde5b921f9f".to_owned(), 1.into());
 
     let mut alice_store = support::test_in_memory_protocol_store().expect("brand new store");
     let mut bob_store = support::test_in_memory_protocol_store().expect("brand new store");
@@ -218,20 +210,11 @@ pub fn v2(c: &mut Criterion) {
     c.bench_function("v2/encrypt", |b| b.iter(&mut encrypt_it));
     c.bench_function("v2/decrypt", |b| b.iter(&mut decrypt_it));
 
-    // Use cfg!(debug_assertions) as a proxy for "no optimizations".
-    let recipient_counts: &[usize] = if cfg!(debug_assertions) {
-        &[50]
-    } else {
-        &[2, 5, 10, 100, 1000]
-    };
-
     // Fill out additional recipients.
     let mut recipients = vec![bob_address.clone()];
-    while recipients.len() < *recipient_counts.last().unwrap() {
-        let next_address = ProtocolAddress::new(
-            Uuid::from_bytes(rng.random()).to_string(),
-            DeviceId::new(1).unwrap(),
-        );
+    while recipients.len() < 1000 {
+        let next_address =
+            ProtocolAddress::new(Uuid::from_bytes(rng.random()).to_string(), 1.into());
 
         let mut next_store = support::test_in_memory_protocol_store().expect("brand new store");
 
@@ -256,7 +239,7 @@ pub fn v2(c: &mut Criterion) {
     }
 
     let mut group = c.benchmark_group("v2/encrypt/multi-recipient");
-    for &recipient_count in recipient_counts {
+    for recipient_count in [2, 5, 10, 100, 1000] {
         group.bench_with_input(
             BenchmarkId::from_parameter(recipient_count),
             &recipient_count,

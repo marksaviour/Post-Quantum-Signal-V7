@@ -3,20 +3,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import * as Native from '../Native.js';
-import { Aci } from '../Address.js';
-import { PublicKey } from '../EcKeys.js';
-import { Environment, type TokioAsyncContext } from '../net.js';
+import * as Native from '../../Native';
+import { Aci } from '../Address';
+import { PublicKey } from '../EcKeys';
+import { Environment, type TokioAsyncContext } from '../net';
 
 // For JSDoc references
-import { type UnauthenticatedChatConnection } from './Chat.js';
+import { type UnauthenticatedChatConnection } from './Chat';
 import {
   type KeyTransparencyError,
   type KeyTransparencyVerificationFailed,
   type ChatServiceInactive,
   type IoError,
-  type RateLimitedError,
-} from '../Errors.js';
+} from '../Errors';
 
 /**
  * Interface of a local persistent key transparency data store.
@@ -25,13 +24,11 @@ import {
  * used by the {@link Client}.
  */
 export interface Store {
-  getLastDistinguishedTreeHead: () => Promise<Uint8Array | null>;
-  setLastDistinguishedTreeHead: (
-    bytes: Readonly<Uint8Array> | null
-  ) => Promise<void>;
+  getLastDistinguishedTreeHead(): Promise<Buffer | null>;
+  setLastDistinguishedTreeHead(bytes: Readonly<Buffer> | null): Promise<void>;
 
-  getAccountData: (aci: Aci) => Promise<Uint8Array | null>;
-  setAccountData: (aci: Aci, bytes: Readonly<Uint8Array>) => Promise<void>;
+  getAccountData(aci: Aci): Promise<Buffer | null>;
+  setAccountData(aci: Aci, bytes: Readonly<Buffer>): Promise<void>;
 }
 
 /**
@@ -45,13 +42,12 @@ export type Options = { abortSignal?: AbortSignal };
  * ACI descriptor for key transparency requests.
  */
 export type AciInfo = { aci: Aci; identityKey: PublicKey };
-
 /**
  * E.164 descriptor for key transparency requests.
  */
 export type E164Info = {
   e164: string;
-  unidentifiedAccessKey: Readonly<Uint8Array>;
+  unidentifiedAccessKey: Readonly<Buffer>;
 };
 
 /**
@@ -59,32 +55,12 @@ export type E164Info = {
  *
  */
 export type Request = {
-  /** ACI information for the request. Required. */
+  /** ACI and ACI Identity Key for the account. Required. */
   aciInfo: AciInfo;
   /** Unidentified access key associated with the account. Optional. */
   e164Info?: E164Info;
   /* Hash of the username associated with the account. Optional. */
-  usernameHash?: Readonly<Uint8Array>;
-};
-
-/**
- *  Mode of the monitor operation.
- *
- *  If the newer version of account data is found in the key transparency
- *  log, self-monitor will terminate with an error, but monitor for other
- *  account will fall back to a full search and update the locally stored
- *  data.
- */
-export enum MonitorMode {
-  Self,
-  Other,
-}
-
-/**
- * An extension of the {@link Request} for the monitor operation.
- */
-export type MonitorRequest = Request & {
-  mode: MonitorMode;
+  usernameHash?: Readonly<Buffer>;
 };
 
 /**
@@ -144,16 +120,14 @@ export interface Client {
    * verify the data in key transparency server response, such as an incorrect proof or a
    * wrong signature.
    * @throws {ChatServiceInactive} if the chat connection has been closed.
-   * @throws {IoError} if an error occurred while communicating with the
+   * @throws {IoError} if an error occurred while commuicating with the
    * server.
-   * @throws {RateLimitedError} if the server is rate limiting this client. This is **retryable**
-   * after waiting the designated delay.
    * */
-  search: (
+  search(
     request: Request,
     store: Store,
     options?: Readonly<Options>
-  ) => Promise<void>;
+  ): Promise<void>;
 
   /**
    * Perform a monitor operation for an account previously searched for.
@@ -178,20 +152,16 @@ export interface Client {
    * different result.
    * @throws {KeyTransparencyVerificationFailed} when it fails to
    * verify the data in key transparency server response, such as an incorrect proof or a
-   * wrong signature. This is also the error thrown when new version
-   * of account data is found in the key transparency log when
-   * self-monitoring. See {@link MonitorMode}.
+   * wrong signature.
    * @throws {ChatServiceInactive} if the chat connection has been closed.
-   * @throws {IoError} if an error occurred while communicating with the
+   * @throws {IoError} if an error occurred while commuicating with the
    * server.
-   * @throws {RateLimitedError} if the server is rate limiting this client. This is **retryable**
-   * after waiting the designated delay.
    */
-  monitor: (
-    request: MonitorRequest,
+  monitor(
+    request: Request,
     store: Store,
     options?: Readonly<Options>
-  ) => Promise<void>;
+  ): Promise<void>;
 }
 
 export class ClientImpl implements Client {
@@ -206,7 +176,7 @@ export class ClientImpl implements Client {
     store: Store,
     options?: Readonly<Options>
   ): Promise<void> {
-    const distinguished = await this._getLatestDistinguished(
+    const distinguished = await this.getLatestDistinguished(
       store,
       options ?? {}
     );
@@ -239,11 +209,11 @@ export class ClientImpl implements Client {
   }
 
   async monitor(
-    request: MonitorRequest,
+    request: Request,
     store: Store,
     options?: Readonly<Options>
   ): Promise<void> {
-    const distinguished = await this._getLatestDistinguished(
+    const distinguished = await this.getLatestDistinguished(
       store,
       options ?? {}
     );
@@ -252,7 +222,6 @@ export class ClientImpl implements Client {
       aciInfo: { aci, identityKey: aciIdentityKey },
       e164Info,
       usernameHash,
-      mode,
     } = request;
     const { e164, unidentifiedAccessKey } = e164Info ?? {
       e164: null,
@@ -270,8 +239,7 @@ export class ClientImpl implements Client {
         unidentifiedAccessKey,
         usernameHash ?? null,
         await store.getAccountData(aci),
-        distinguished,
-        mode === MonitorMode.Self
+        distinguished
       )
     );
     await store.setAccountData(aci, accountData);
@@ -280,7 +248,7 @@ export class ClientImpl implements Client {
   private async updateDistinguished(
     store: Store,
     { abortSignal }: Readonly<Options>
-  ): Promise<Uint8Array> {
+  ): Promise<Buffer> {
     const bytes = await this.asyncContext.makeCancellable(
       abortSignal,
       Native.KeyTransparency_Distinguished(
@@ -294,10 +262,10 @@ export class ClientImpl implements Client {
     return bytes;
   }
 
-  async _getLatestDistinguished(
+  private async getLatestDistinguished(
     store: Store,
     options: Readonly<Options>
-  ): Promise<Uint8Array> {
+  ): Promise<Buffer> {
     return (
       (await store.getLastDistinguishedTreeHead()) ??
       (await this.updateDistinguished(store, options))

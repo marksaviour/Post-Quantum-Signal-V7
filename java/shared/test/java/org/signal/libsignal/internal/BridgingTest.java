@@ -12,7 +12,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
-import kotlin.Pair;
 import org.junit.After;
 import org.junit.Assume;
 import org.junit.Before;
@@ -188,8 +187,7 @@ public class BridgingTest {
     map.put("c", "ccc");
     final var dumped = new BridgedStringMap(map).dump();
     assertEquals(
-        dumped,
-        """
+        dumped, """
       {
         "a": "aaa",
         "b": "bbb",
@@ -215,11 +213,5 @@ public class BridgingTest {
     } finally {
       NativeTesting.TestingHandleType_Destroy(handle);
     }
-  }
-
-  @Test
-  public void testReturnPair() throws Exception {
-    var pair = NativeTesting.TESTING_ReturnPair();
-    assertEquals(pair, new Pair<>(1, "libsignal"));
   }
 }

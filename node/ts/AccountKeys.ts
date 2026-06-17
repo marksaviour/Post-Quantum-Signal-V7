@@ -12,10 +12,10 @@
  */
 
 import * as crypto from 'node:crypto';
-import * as Native from './Native.js';
-import ByteArray from './zkgroup/internal/ByteArray.js';
-import { Aci } from './Address.js';
-import { PrivateKey } from './EcKeys.js';
+import * as Native from '../Native';
+import ByteArray from './zkgroup/internal/ByteArray';
+import { Aci } from './Address';
+import { PrivateKey } from './EcKeys';
 
 /**
  * The randomly-generated user-memorized entropy used to derive the backup key,
@@ -49,7 +49,7 @@ export class AccountEntropyPool {
    * `accountEntropyPool` must be a **validated** account entropy pool;
    * passing an arbitrary string here is considered a programmer error.
    */
-  public static deriveSvrKey(accountEntropyPool: string): Uint8Array {
+  public static deriveSvrKey(accountEntropyPool: string): Buffer {
     return Native.AccountEntropyPool_DeriveSvrKey(accountEntropyPool);
   }
 
@@ -79,7 +79,7 @@ export class BackupKey extends ByteArray {
   private readonly __type?: never;
   static SIZE = 32;
 
-  constructor(contents: Uint8Array) {
+  constructor(contents: Buffer) {
     super(contents, BackupKey.checkLength(BackupKey.SIZE));
   }
 
@@ -100,7 +100,7 @@ export class BackupKey extends ByteArray {
    *
    * Used for both message and media backups.
    */
-  public deriveBackupId(aci: Aci): Uint8Array {
+  public deriveBackupId(aci: Aci): Buffer {
     return Native.BackupKey_DeriveBackupId(
       this.contents,
       aci.getServiceIdFixedWidthBinary()
@@ -126,7 +126,7 @@ export class BackupKey extends ByteArray {
    *
    * Only relevant for message backup keys.
    */
-  public deriveLocalBackupMetadataKey(): Uint8Array {
+  public deriveLocalBackupMetadataKey(): Buffer {
     return Native.BackupKey_DeriveLocalBackupMetadataKey(this.contents);
   }
 
@@ -135,7 +135,7 @@ export class BackupKey extends ByteArray {
    *
    * Only relevant for media backup keys.
    */
-  public deriveMediaId(mediaName: string): Uint8Array {
+  public deriveMediaId(mediaName: string): Buffer {
     return Native.BackupKey_DeriveMediaId(this.contents, mediaName);
   }
 
@@ -146,7 +146,7 @@ export class BackupKey extends ByteArray {
    *
    * Only relevant for media backup keys.
    */
-  public deriveMediaEncryptionKey(mediaId: Uint8Array): Uint8Array {
+  public deriveMediaEncryptionKey(mediaId: Buffer): Buffer {
     return Native.BackupKey_DeriveMediaEncryptionKey(this.contents, mediaId);
   }
 
@@ -158,28 +158,10 @@ export class BackupKey extends ByteArray {
    *
    * Only relevant for media backup keys.
    */
-  public deriveThumbnailTransitEncryptionKey(mediaId: Uint8Array): Uint8Array {
+  public deriveThumbnailTransitEncryptionKey(mediaId: Buffer): Buffer {
     return Native.BackupKey_DeriveThumbnailTransitEncryptionKey(
       this.contents,
       mediaId
-    );
-  }
-}
-
-/**
- * A forward secrecy token used for deriving message backup keys.
- *
- * This token is retrieved from the server when restoring a backup and is used together
- * with the backup key to derive the actual encryption keys for message backups.
- */
-export class BackupForwardSecrecyToken extends ByteArray {
-  private readonly __type?: never;
-  static SIZE = 32;
-
-  constructor(contents: Uint8Array) {
-    super(
-      contents,
-      BackupForwardSecrecyToken.checkLength(BackupForwardSecrecyToken.SIZE)
     );
   }
 }

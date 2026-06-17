@@ -3,17 +3,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-#![warn(clippy::unwrap_used)]
-
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::num::NonZeroU16;
+use std::str::FromStr;
+use std::string::ToString;
 use std::sync::Arc;
 
-use http::{HeaderName, HeaderValue};
+use ::http::uri::PathAndQuery;
+use ::http::Uri;
+use async_trait::async_trait;
+use http::{HeaderMap, HeaderName, HeaderValue};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::certs::RootCertificates;
-use crate::errors::{LogSafeDisplay, RetryLater};
+use crate::errors::{LogSafeDisplay, RetryLater, TransportConnectError};
 use crate::host::Host;
 use crate::timeouts::{WS_KEEP_ALIVE_INTERVAL, WS_MAX_IDLE_INTERVAL};
 
@@ -22,14 +25,14 @@ pub mod dns;
 pub mod errors;
 pub mod host;
 pub mod http_client;
+pub mod noise;
 pub mod route;
-pub mod stream;
+pub mod service;
 pub mod tcp_ssl;
-#[cfg(any(test, feature = "test-util"))]
-pub mod testutil;
 pub mod timeouts;
 pub mod utils;
 pub mod ws;
+pub mod ws2;
 
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(test, derive(PartialEq))]
@@ -80,14 +83,30 @@ pub enum EnforceMinimumTls {
     No,
 }
 
-/// Whether to override the platform default for the Nagle algorithm via TCP_NODELAY.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
-pub enum OverrideNagleAlgorithm {
-    /// Explicitly disable the Nagle algorithm (enable TCP_NODELAY).
-    OverrideToOff,
-    /// Leave the operating system's default behavior unchanged.
-    #[default]
-    UseSystemDefault,
+/// A collection of commonly used decorators for HTTP requests.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HttpRequestDecorator {
+    /// Adds a collection of headers to the request
+    Headers(http::header::HeaderMap),
+    /// Prefixes the path portion of the request with the given string.
+    PathPrefix(&'static str),
+    /// Applies generic decoration logic.
+    Generic(fn(http::request::Builder) -> http::request::Builder),
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct HttpRequestDecoratorSeq(Vec<HttpRequestDecorator>);
+
+impl From<HttpRequestDecorator> for HttpRequestDecoratorSeq {
+    fn from(value: HttpRequestDecorator) -> Self {
+        Self(vec![value])
+    }
+}
+
+impl HttpRequestDecoratorSeq {
+    pub fn add(&mut self, decorator: HttpRequestDecorator) {
+        self.0.push(decorator)
+    }
 }
 
 /// The fully general version of [`AsStaticHttpHeader`], where the name of the header may depend on the
@@ -111,6 +130,13 @@ impl<T: AsStaticHttpHeader> AsHttpHeader for T {
     }
 }
 
+impl<T: AsHttpHeader> From<&'_ T> for HttpRequestDecorator {
+    fn from(value: &'_ T) -> Self {
+        let (name, value) = value.as_header();
+        HttpRequestDecorator::header(name, value)
+    }
+}
+
 /// Contains all information required to establish an HTTP connection to a remote endpoint.
 ///
 /// For WebSocket connections, `http_request_decorator` will only be applied to the initial
@@ -121,8 +147,8 @@ pub struct ConnectionParams {
     pub route_type: RouteType,
     /// Host name used in the HTTP headers.
     pub http_host: Arc<str>,
-    /// Prefix prepended to the path of all HTTP requests.
-    pub path_prefix: Option<&'static str>,
+    /// Applied to all HTTP requests.
+    pub http_request_decorator: HttpRequestDecoratorSeq,
     /// If present, differentiates HTTP responses that actually come from the remote endpoint from
     /// those produced by an intermediate server.
     pub connection_confirmation_header: Option<HeaderName>,
@@ -131,6 +157,12 @@ pub struct ConnectionParams {
 }
 
 impl ConnectionParams {
+    pub fn with_decorator(mut self, decorator: HttpRequestDecorator) -> Self {
+        let HttpRequestDecoratorSeq(decorators) = &mut self.http_request_decorator;
+        decorators.push(decorator);
+        self
+    }
+
     pub fn with_confirmation_header(mut self, header: HeaderName) -> Self {
         self.connection_confirmation_header = Some(header);
         self
@@ -171,17 +203,11 @@ pub struct ServiceConnectionInfo {
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq))]
 pub struct TransportInfo {
-    pub local_addr: SocketAddr,
-    pub remote_addr: SocketAddr,
-}
+    /// The IP address version over which the connection is established.
+    pub ip_version: IpType,
 
-impl TransportInfo {
-    pub fn ip_version(&self) -> IpType {
-        match self.local_addr.ip() {
-            IpAddr::V4(_) => IpType::V4,
-            IpAddr::V6(_) => IpType::V6,
-        }
-    }
+    /// The local port number for the connection.
+    pub local_port: u16,
 }
 
 /// An established connection.
@@ -244,51 +270,97 @@ impl ServiceConnectionInfo {
     }
 }
 
+impl HttpRequestDecoratorSeq {
+    pub fn decorate_request(
+        &self,
+        request_builder: http::request::Builder,
+    ) -> http::request::Builder {
+        self.0
+            .iter()
+            .fold(request_builder, |rb, dec| dec.decorate_request(rb))
+    }
+}
+
+impl HttpRequestDecorator {
+    /// Convenience constructor for [`HttpRequestDecorator::Headers`] with a map
+    /// with one entry.
+    pub fn header(name: HeaderName, value: HeaderValue) -> Self {
+        Self::Headers(HeaderMap::from_iter([(name, value)]))
+    }
+
+    fn decorate_request(&self, request_builder: http::request::Builder) -> http::request::Builder {
+        match self {
+            Self::Generic(decorator) => decorator(request_builder),
+            Self::Headers(header_map) => header_map
+                .into_iter()
+                .fold(request_builder, |builder, (name, value)| {
+                    builder.header(name, value)
+                }),
+            Self::PathPrefix(prefix) => {
+                let uri = request_builder.uri_ref().expect("request has URI set");
+                let mut parts = (*uri).clone().into_parts();
+                let decorated_pq = match parts.path_and_query {
+                    Some(pq) => format!("{}{}", prefix, pq.as_str()),
+                    None => prefix.to_string(),
+                };
+                parts.path_and_query = Some(
+                    PathAndQuery::from_str(decorated_pq.as_str()).expect("valid path and query"),
+                );
+                request_builder.uri(Uri::from_parts(parts).expect("valid uri"))
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct StreamAndInfo<T>(pub T, pub ServiceConnectionInfo);
+
+impl<T> StreamAndInfo<T> {
+    fn map_stream<U>(self, f: impl FnOnce(T) -> U) -> StreamAndInfo<U> {
+        StreamAndInfo(f(self.0), self.1)
+    }
+}
+
 pub trait AsyncDuplexStream: AsyncRead + AsyncWrite + Unpin + Send {}
 
 impl<S: AsyncRead + AsyncWrite + Unpin + Send> AsyncDuplexStream for S {}
 
+/// Establishes TCP/TLS connections to remote destinations.
+///
+/// Given a destination in the form of [`TransportConnectionParams`],
+/// establishes a TLS handshake with the remote target, possibly through one or
+/// more intermediary proxies.
+#[async_trait]
+pub trait TransportConnector: Clone + Send + Sync {
+    type Stream: AsyncDuplexStream + 'static;
+
+    async fn connect(
+        &self,
+        connection_params: &TransportConnectionParams,
+        alpn: Alpn,
+    ) -> Result<StreamAndInfo<Self::Stream>, TransportConnectError>;
+}
+
 /// A single ALPN list entry.
+///
+/// Implements `AsRef<[u8]>` as the length-delimited wire form.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Alpn {
     Http1_1,
     Http2,
 }
 
-impl Alpn {
-    pub const fn encoded(&self) -> &'static [u8] {
-        self.length_prefixed()
-            .split_first()
-            .expect("always has a prefix to strip")
-            .1
-    }
-
-    pub const fn length_prefixed(&self) -> &'static [u8] {
+impl AsRef<[u8]> for Alpn {
+    fn as_ref(&self) -> &[u8] {
         match self {
-            Self::Http1_1 => b"\x08http/1.1",
-            Self::Http2 => b"\x02h2",
+            Alpn::Http1_1 => b"\x08http/1.1",
+            Alpn::Http2 => b"\x02h2",
         }
     }
 }
 
-pub struct UnrecognizedAlpn;
-
-impl TryFrom<&'_ [u8]> for Alpn {
-    type Error = UnrecognizedAlpn;
-
-    fn try_from(value: &'_ [u8]) -> Result<Self, Self::Error> {
-        if value == Self::Http2.encoded() {
-            return Ok(Self::Http2);
-        }
-        if value == Self::Http1_1.encoded() {
-            return Ok(Self::Http1_1);
-        }
-        Err(UnrecognizedAlpn)
-    }
-}
-
-pub const RECOMMENDED_WS_CONFIG: ws::Config = {
-    ws::Config {
+pub const RECOMMENDED_WS2_CONFIG: ws2::Config = {
+    ws2::Config {
         local_idle_timeout: WS_KEEP_ALIVE_INTERVAL,
         remote_idle_ping_timeout: WS_KEEP_ALIVE_INTERVAL,
         remote_idle_disconnect_timeout: WS_MAX_IDLE_INTERVAL,
@@ -310,12 +382,188 @@ pub fn extract_retry_later(headers: &http::header::HeaderMap) -> Option<RetryLat
     })
 }
 
+#[cfg(any(test, feature = "test-util"))]
+pub mod testutil {
+    use std::fmt::Debug;
+    use std::io;
+    use std::io::Error as IoError;
+    use std::pin::Pin;
+    use std::sync::LazyLock;
+    use std::task::{Context, Poll};
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+    use displaydoc::Display;
+    use futures_util::stream::FusedStream;
+    use futures_util::{Sink, SinkExt as _, Stream};
+    use tokio::io::DuplexStream;
+    use tokio_util::sync::PollSender;
+    use warp::{Filter, Reply};
+
+    use crate::errors::{LogSafeDisplay, TransportConnectError};
+    use crate::utils::NetworkChangeEvent;
+    use crate::{
+        Alpn, DnsSource, RouteType, ServiceConnectionInfo, StreamAndInfo,
+        TransportConnectionParams, TransportConnector,
+    };
+
+    #[derive(Debug, Display)]
+    pub enum TestError {
+        /// expected error
+        Expected,
+        /// unexpected error
+        Unexpected(&'static str),
+    }
+
+    impl LogSafeDisplay for TestError {}
+
+    // This could be Copy, but we don't want to rely on *all* errors being Copy, or only test
+    // that case.
+
+    // the choice of the constant value is dictated by a vague notion of being
+    // "not too many, but also not just once or twice"
+
+    pub const TIMEOUT_DURATION: Duration = Duration::from_millis(1000);
+
+    // we need to advance time in tests by some value not to run into the scenario
+    // of attempts starting at the same time, but also by not too much so that we
+    // don't step over the cool down time
+
+    pub fn no_network_change_events() -> NetworkChangeEvent {
+        static SENDER_THAT_NEVER_SENDS: LazyLock<tokio::sync::watch::Sender<()>> =
+            LazyLock::new(Default::default);
+        SENDER_THAT_NEVER_SENDS.subscribe()
+    }
+
+    #[derive(Clone)]
+    pub struct InMemoryWarpConnector<F> {
+        filter: F,
+    }
+
+    impl<F> InMemoryWarpConnector<F> {
+        pub fn new(filter: F) -> Self {
+            Self { filter }
+        }
+    }
+
+    #[async_trait]
+    impl<F> TransportConnector for InMemoryWarpConnector<F>
+    where
+        F: Filter<Extract: Reply> + Clone + Send + Sync + 'static,
+    {
+        type Stream = DuplexStream;
+
+        async fn connect(
+            &self,
+            connection_params: &TransportConnectionParams,
+            _alpn: Alpn,
+        ) -> Result<StreamAndInfo<Self::Stream>, TransportConnectError> {
+            let (client, server) = tokio::io::duplex(1024);
+            let routes = self.filter.clone();
+            tokio::spawn(async {
+                let one_element_iter =
+                    futures_util::stream::iter(vec![Ok::<DuplexStream, io::Error>(server)]);
+                warp::serve(routes).run_incoming(one_element_iter).await;
+            });
+            Ok(StreamAndInfo(
+                client,
+                ServiceConnectionInfo {
+                    route_type: RouteType::Test,
+                    dns_source: DnsSource::Test,
+                    address: connection_params.tcp_host.clone(),
+                },
+            ))
+        }
+    }
+
+    /// Trivial [`Sink`] and [`Stream`] implementation over a pair of buffered channels.
+    pub struct TestStream<T, E> {
+        rx: tokio::sync::mpsc::Receiver<Result<T, E>>,
+        tx: PollSender<Result<T, E>>,
+    }
+
+    impl<T: Send, E: Send> TestStream<T, E> {
+        pub fn new_pair(channel_size: usize) -> (Self, Self) {
+            let [lch, rch] = [(); 2].map(|()| tokio::sync::mpsc::channel(channel_size));
+            let l = Self {
+                rx: lch.1,
+                tx: PollSender::new(rch.0),
+            };
+            let r = Self {
+                rx: rch.1,
+                tx: PollSender::new(lch.0),
+            };
+            (l, r)
+        }
+
+        pub async fn send_error(&mut self, error: E) -> Result<(), Option<E>> {
+            self.tx.send(Err(error)).await.map_err(|e| {
+                e.into_inner().map(|r| match r {
+                    Ok(_) => unreachable!("sent item was an error"),
+                    Err(e) => e,
+                })
+            })
+        }
+        pub fn rx_is_closed(&self) -> bool {
+            self.rx.is_closed()
+        }
+    }
+
+    impl<T: Send, E: Send> Stream for TestStream<T, E> {
+        type Item = Result<T, E>;
+
+        fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            self.get_mut().rx.poll_recv(cx)
+        }
+    }
+
+    impl<T: Send, E: Send> FusedStream for TestStream<T, E> {
+        fn is_terminated(&self) -> bool {
+            self.rx.is_closed() && self.rx.is_empty()
+        }
+    }
+
+    impl<T: Send, E: Send + From<IoError>> Sink<T> for TestStream<T, E> {
+        type Error = E;
+
+        fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            self.get_mut()
+                .tx
+                .poll_ready_unpin(cx)
+                .map_err(|_| IoError::other("poll_reserve for send failed").into())
+        }
+
+        fn start_send(self: Pin<&mut Self>, item: T) -> Result<(), Self::Error> {
+            self.get_mut()
+                .tx
+                .start_send_unpin(Ok(item))
+                .map_err(|_| IoError::other("send failed").into())
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            self.get_mut()
+                .tx
+                .poll_flush_unpin(cx)
+                .map_err(|_| IoError::other("flush failed").into())
+        }
+
+        fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            self.get_mut()
+                .tx
+                .poll_close_unpin(cx)
+                .map_err(|_| IoError::other("close failed").into())
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod test {
     use const_str::ip_addr;
+    use http::Request;
 
     use crate::host::Host;
-    use crate::{DnsSource, RouteType, ServiceConnectionInfo};
+    use crate::utils::basic_authorization;
+    use crate::{DnsSource, HttpRequestDecorator, RouteType, ServiceConnectionInfo};
 
     #[test]
     fn connection_info_description() {
@@ -338,5 +586,37 @@ pub(crate) mod test {
             .description(),
             "route=test;dns_source=systemlookup;ip_type=V4"
         )
+    }
+
+    #[test]
+    fn test_path_prefix_decorator() {
+        let cases = vec![
+            ("https://chat.signal.org/", "/chat/"),
+            ("https://chat.signal.org/v1", "/chat/v1"),
+            ("https://chat.signal.org/v1?a=b", "/chat/v1"),
+            ("https://chat.signal.org/v1/endpoint", "/chat/v1/endpoint"),
+        ];
+        for (input, expected_path) in cases.into_iter() {
+            let builder = Request::get(input);
+            let builder = HttpRequestDecorator::PathPrefix("/chat").decorate_request(builder);
+            let (parts, _) = builder.body(()).unwrap().into_parts();
+            assert_eq!(expected_path, parts.uri.path(), "for input [{input}]")
+        }
+    }
+
+    #[test]
+    fn test_header_auth_decorator() {
+        let expected = "Basic dXNybm06cHNzd2Q=";
+        let builder = Request::get("https://chat.signal.org/");
+        let builder = HttpRequestDecorator::header(
+            http::header::AUTHORIZATION,
+            basic_authorization("usrnm", "psswd"),
+        )
+        .decorate_request(builder);
+        let (parts, _) = builder.body(()).unwrap().into_parts();
+        assert_eq!(
+            expected,
+            parts.headers.get(http::header::AUTHORIZATION).unwrap()
+        );
     }
 }

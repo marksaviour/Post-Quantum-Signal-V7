@@ -4,7 +4,6 @@
 //
 
 import { assert } from 'chai';
-import { Buffer } from 'node:buffer';
 
 import {
   ServerSecretParams,
@@ -60,19 +59,31 @@ import {
   ReceiptCredentialResponse,
   BackupLevel,
   BackupCredentialType,
-} from '../zkgroup/index.js';
-import { Aci, Pni } from '../Address.js';
-import { LibSignalErrorBase, Uuid } from '../index.js';
-import {
-  assertArrayEquals,
-  assertArrayNotEquals,
-  assertByteArray,
-} from './util.js';
+} from '../zkgroup/';
+import { Aci, Pni } from '../Address';
+import { LibSignalErrorBase, Uuid } from '..';
 
 const SECONDS_PER_DAY = 86400;
 
 function hexToBuffer(hex: string) {
   return Buffer.from(hex, 'hex');
+}
+function assertByteArray(hex: string, actual: Buffer) {
+  const actualHex = actual.toString('hex');
+
+  assert.strictEqual(hex, actualHex);
+}
+function assertArrayEquals(expected: Buffer, actual: Buffer) {
+  const expectedHex = expected.toString('hex');
+  const actualHex = actual.toString('hex');
+
+  assert.strictEqual(expectedHex, actualHex);
+}
+function assertArrayNotEquals(expected: Buffer, actual: Buffer) {
+  const expectedHex = expected.toString('hex');
+  const actualHex = actual.toString('hex');
+
+  assert.notEqual(expectedHex, actualHex);
 }
 
 describe('ZKGroup', () => {
@@ -101,7 +112,7 @@ describe('ZKGroup', () => {
 
   it('deserializationErrorType', () => {
     function assertDeserializeInvalidThrows<T>(
-      constructor: new (serialized: Uint8Array) => T
+      constructor: new (serialized: Buffer) => T
     ) {
       assert.throws(
         () => {
@@ -395,7 +406,7 @@ describe('ZKGroup', () => {
       signature.serialize()
     );
 
-    const alteredMessage = Uint8Array.from(message);
+    const alteredMessage = Buffer.from(message);
     alteredMessage[0] ^= 1;
 
     assertArrayNotEquals(message, alteredMessage);
@@ -403,7 +414,7 @@ describe('ZKGroup', () => {
     try {
       serverPublicParams.verifySignature(alteredMessage, signature);
       assert.fail('signature validation should have failed!');
-    } catch (_error) {
+    } catch (error) {
       // good
     }
   });
@@ -416,13 +427,13 @@ describe('ZKGroup', () => {
   });
 
   it('testInvalidSerialized', () => {
-    const ckp = new Uint8Array(289);
+    const ckp = Buffer.alloc(289);
     ckp.fill(-127);
     assert.throws(() => new GroupSecretParams(ckp));
   });
 
   it('testWrongSizeSerialized', () => {
-    const ckp = new Uint8Array(5);
+    const ckp = Buffer.alloc(5);
     ckp.fill(-127);
     assert.throws(() => new GroupSecretParams(ckp));
   });
@@ -431,7 +442,7 @@ describe('ZKGroup', () => {
     const groupSecretParams = GroupSecretParams.generate();
     const clientZkGroupCipher = new ClientZkGroupCipher(groupSecretParams);
 
-    const plaintext = Uint8Array.of(0, 1, 2, 3, 4);
+    const plaintext = Buffer.from([0, 1, 2, 3, 4]);
     const ciphertext = clientZkGroupCipher.encryptBlob(plaintext);
     const plaintext2 = clientZkGroupCipher.decryptBlob(ciphertext);
     assertArrayEquals(plaintext, plaintext2);

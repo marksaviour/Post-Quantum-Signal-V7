@@ -26,7 +26,7 @@ class SessionTests: TestCaseBase {
             initSessions(alice_store, bob_store, bob_address)
 
             // Alice sends a message:
-            let ptext_a = Data([8, 6, 7, 5, 3, 0, 9])
+            let ptext_a: [UInt8] = [8, 6, 7, 5, 3, 0, 9]
 
             let ctext_a = try! signalEncrypt(
                 message: ptext_a,
@@ -54,7 +54,7 @@ class SessionTests: TestCaseBase {
             XCTAssertEqual(ptext_a, ptext_b)
 
             // Bob replies
-            let ptext2_b = Data([23])
+            let ptext2_b: [UInt8] = [23]
 
             let ctext2_b = try! signalEncrypt(
                 message: ptext2_b,
@@ -143,12 +143,8 @@ class SessionTests: TestCaseBase {
 
         let bob_identity_key_pair = try! bob_store.identityKeyPair(context: NullContext())
         let bob_identity_key = bob_identity_key_pair.identityKey
-        let bob_signed_pre_key_signature = bob_identity_key_pair.privateKey.generateSignature(
-            message: bob_signed_pre_key_public
-        )
-        let bob_kyber_pre_key_signature = bob_identity_key_pair.privateKey.generateSignature(
-            message: bob_kyber_pre_key_public
-        )
+        let bob_signed_pre_key_signature = bob_identity_key_pair.privateKey.generateSignature(message: bob_signed_pre_key_public)
+        let bob_kyber_pre_key_signature = bob_identity_key_pair.privateKey.generateSignature(message: bob_kyber_pre_key_public)
 
         let prekey_id: UInt32 = 4570
         let signed_prekey_id: UInt32 = 3006
@@ -200,130 +196,14 @@ class SessionTests: TestCaseBase {
         XCTAssertTrue(updated_session.hasCurrentState(now: Date(timeIntervalSinceReferenceDate: 0)))
         XCTAssertFalse(updated_session.hasCurrentState(now: Date(timeIntervalSinceReferenceDate: 60 * 60 * 24 * 90)))
 
-        XCTAssertThrowsError(
-            try signalEncrypt(
-                message: ptext_a,
-                for: bob_address,
-                sessionStore: alice_store,
-                identityStore: alice_store,
-                now: Date(timeIntervalSinceReferenceDate: 60 * 60 * 24 * 90),
-                context: NullContext()
-            )
-        )
-    }
-
-    func testRejectsPreKeyMessageSentFromDifferentUser() {
-        let alice_address = try! ProtocolAddress(name: "+14151111111", deviceId: 1)
-        let bob_address = try! ProtocolAddress(name: "+14151111112", deviceId: 1)
-        let mallory_address = try! ProtocolAddress(name: "+14151111113", deviceId: 1)
-
-        let alice_store = InMemorySignalProtocolStore()
-        let bob_store = InMemorySignalProtocolStore()
-
-        let bob_signed_pre_key = PrivateKey.generate()
-        let bob_kyber_pre_key = KEMKeyPair.generate()
-
-        let bob_signed_pre_key_public = bob_signed_pre_key.publicKey.serialize()
-        let bob_kyber_pre_key_public = bob_kyber_pre_key.publicKey.serialize()
-
-        let bob_identity_key_pair = try! bob_store.identityKeyPair(context: NullContext())
-        let bob_identity_key = bob_identity_key_pair.identityKey
-        let bob_signed_pre_key_signature = bob_identity_key_pair.privateKey.generateSignature(
-            message: bob_signed_pre_key_public
-        )
-        let bob_kyber_pre_key_signature = bob_identity_key_pair.privateKey.generateSignature(
-            message: bob_kyber_pre_key_public
-        )
-
-        let signed_prekey_id: UInt32 = 3006
-        let kyber_pre_key_id: UInt32 = 8888
-
-        try! bob_store
-            .storeSignedPreKey(
-                SignedPreKeyRecord(
-                    id: signed_prekey_id,
-                    timestamp: 42000,
-                    privateKey: bob_signed_pre_key,
-                    signature: bob_signed_pre_key_signature
-                ),
-                id: signed_prekey_id,
-                context: NullContext()
-            )
-        try! bob_store
-            .storeKyberPreKey(
-                KyberPreKeyRecord(
-                    id: kyber_pre_key_id,
-                    timestamp: 42000,
-                    keyPair: bob_kyber_pre_key,
-                    signature: bob_kyber_pre_key_signature
-                ),
-                id: kyber_pre_key_id,
-                context: NullContext()
-            )
-
-        let bob_bundle = try! PreKeyBundle(
-            registrationId: bob_store.localRegistrationId(context: NullContext()),
-            deviceId: 9,
-            signedPrekeyId: signed_prekey_id,
-            signedPrekey: bob_signed_pre_key.publicKey,
-            signedPrekeySignature: bob_signed_pre_key_signature,
-            identity: bob_identity_key,
-            kyberPrekeyId: kyber_pre_key_id,
-            kyberPrekey: bob_kyber_pre_key.publicKey,
-            kyberPrekeySignature: bob_kyber_pre_key_signature
-        )
-
-        // Alice processes the bundle:
-        try! processPreKeyBundle(
-            bob_bundle,
-            for: bob_address,
-            sessionStore: alice_store,
-            identityStore: alice_store,
-            context: NullContext()
-        )
-
-        // Alice sends a message:
-        let ptext_a: [UInt8] = [8, 6, 7, 5, 3, 0, 9]
-
-        let ctext_a = try! signalEncrypt(
+        XCTAssertThrowsError(try signalEncrypt(
             message: ptext_a,
             for: bob_address,
             sessionStore: alice_store,
             identityStore: alice_store,
+            now: Date(timeIntervalSinceReferenceDate: 60 * 60 * 24 * 90),
             context: NullContext()
-        )
-
-        XCTAssertEqual(ctext_a.messageType, .preKey)
-        let ctext_b = try! PreKeySignalMessage(bytes: ctext_a.serialize())
-
-        _ = try! signalDecryptPreKey(
-            message: ctext_b,
-            from: alice_address,
-            sessionStore: bob_store,
-            identityStore: bob_store,
-            preKeyStore: bob_store,
-            signedPreKeyStore: bob_store,
-            kyberPreKeyStore: bob_store,
-            context: NullContext()
-        )
-
-        do {
-            _ = try signalDecryptPreKey(
-                message: ctext_b,
-                from: mallory_address,
-                sessionStore: bob_store,
-                identityStore: bob_store,
-                preKeyStore: bob_store,
-                signedPreKeyStore: bob_store,
-                kyberPreKeyStore: bob_store,
-                context: NullContext()
-            )
-            XCTFail("should have thrown")
-        } catch SignalError.invalidMessage(_) {
-            // okay, this is what InMemorySignalProtocolStore throws in this case
-        } catch {
-            XCTFail("unexpected error: \(error)")
-        }
+        ))
     }
 
     func testSealedSenderSession() throws {
@@ -337,11 +217,7 @@ class SessionTests: TestCaseBase {
 
         let trust_root = IdentityKeyPair.generate()
         let server_keys = IdentityKeyPair.generate()
-        let server_cert = try! ServerCertificate(
-            keyId: 1,
-            publicKey: server_keys.publicKey,
-            trustRoot: trust_root.privateKey
-        )
+        let server_cert = try! ServerCertificate(keyId: 1, publicKey: server_keys.publicKey, trustRoot: trust_root.privateKey)
         let sender_addr = try! SealedSenderAddress(
             e164: "+14151111111",
             uuidString: alice_address.name,
@@ -355,7 +231,7 @@ class SessionTests: TestCaseBase {
             signerKey: server_keys.privateKey
         )
 
-        let message = Data("2020 vision".utf8)
+        let message = Array("2020 vision".utf8)
 
         func sealedSenderEncryptPlaintext<Bytes: ContiguousBytes>(
             message: Bytes,
@@ -364,7 +240,7 @@ class SessionTests: TestCaseBase {
             sessionStore: SessionStore,
             identityStore: IdentityKeyStore,
             context: StoreContext
-        ) throws -> Data {
+        ) throws -> [UInt8] {
             let ciphertextMessage = try signalEncrypt(
                 message: message,
                 for: address,
@@ -392,29 +268,11 @@ class SessionTests: TestCaseBase {
             context: NullContext()
         )
 
-        let usmc = try! UnidentifiedSenderMessageContent(
-            message: ciphertext,
-            identityStore: bob_store,
-            context: NullContext()
-        )
+        let usmc = try! UnidentifiedSenderMessageContent(message: ciphertext, identityStore: bob_store, context: NullContext())
         XCTAssertEqual(usmc.messageType, .preKey)
-        XCTAssertTrue(usmc.senderCertificate.validate(trustRoot: trust_root.publicKey, time: 31335))
+        XCTAssertTrue(try! usmc.senderCertificate.validate(trustRoot: trust_root.publicKey, time: 31335))
         XCTAssertEqual(usmc.senderCertificate.sender, sender_addr)
         XCTAssertEqual(usmc.senderCertificate.senderAci, alice_address.serviceId)
-
-        let randomPublicKey = { IdentityKeyPair.generate().publicKey }
-        XCTAssertTrue(
-            usmc.senderCertificate.validate(
-                trustRoots: [randomPublicKey(), trust_root.publicKey, randomPublicKey()],
-                time: 31335
-            )
-        )
-        XCTAssertFalse(
-            usmc.senderCertificate.validate(
-                trustRoots: [randomPublicKey(), randomPublicKey()],
-                time: 31335
-            )
-        )
 
         let plaintext = try signalDecryptPreKey(
             message: try! PreKeySignalMessage(bytes: usmc.contents),
@@ -491,11 +349,7 @@ class SessionTests: TestCaseBase {
 
         let trust_root = IdentityKeyPair.generate()
         let server_keys = IdentityKeyPair.generate()
-        let server_cert = try! ServerCertificate(
-            keyId: 1,
-            publicKey: server_keys.publicKey,
-            trustRoot: trust_root.privateKey
-        )
+        let server_cert = try! ServerCertificate(keyId: 1, publicKey: server_keys.publicKey, trustRoot: trust_root.privateKey)
         let sender_addr = try! SealedSenderAddress(
             e164: "+14151111111",
             uuidString: alice_address.name,
@@ -594,7 +448,7 @@ class SessionTests: TestCaseBase {
             context: NullContext()
         )
 
-        XCTAssertEqual(b_ptext, Data([1, 2, 3]))
+        XCTAssertEqual(b_ptext, [1, 2, 3])
 
         let another_skdm = try! SenderKeyDistributionMessage(
             from: alice_address,
@@ -617,11 +471,7 @@ class SessionTests: TestCaseBase {
 
         let trust_root = IdentityKeyPair.generate()
         let server_keys = IdentityKeyPair.generate()
-        let server_cert = try! ServerCertificate(
-            keyId: 1,
-            publicKey: server_keys.publicKey,
-            trustRoot: trust_root.privateKey
-        )
+        let server_cert = try! ServerCertificate(keyId: 1, publicKey: server_keys.publicKey, trustRoot: trust_root.privateKey)
         let sender_addr = try! SealedSenderAddress(
             e164: "+14151111111",
             uuidString: alice_address.name,
@@ -687,11 +537,7 @@ class SessionTests: TestCaseBase {
 
         let trust_root = IdentityKeyPair.generate()
         let server_keys = IdentityKeyPair.generate()
-        let server_cert = try! ServerCertificate(
-            keyId: 1,
-            publicKey: server_keys.publicKey,
-            trustRoot: trust_root.privateKey
-        )
+        let server_cert = try! ServerCertificate(keyId: 1, publicKey: server_keys.publicKey, trustRoot: trust_root.privateKey)
         let sender_addr = try! SealedSenderAddress(
             e164: "+14151111111",
             uuidString: alice_address.name,
@@ -729,16 +575,14 @@ class SessionTests: TestCaseBase {
             groupId: [42]
         )
 
-        let sent_message = Data(
-            try! sealedSenderMultiRecipientEncrypt(
-                a_usmc,
-                for: [bob_address],
-                excludedRecipients: [eve_service_id, mallory_service_id],
-                identityStore: alice_store,
-                sessionStore: alice_store,
-                context: NullContext()
-            )
-        )
+        let sent_message = Data(try! sealedSenderMultiRecipientEncrypt(
+            a_usmc,
+            for: [bob_address],
+            excludedRecipients: [eve_service_id, mallory_service_id],
+            identityStore: alice_store,
+            sessionStore: alice_store,
+            context: NullContext()
+        ))
 
         // Clients can't directly parse arbitrary SSv2 SentMessages, so just check that it contains
         // the excluded recipient service IDs followed by a device ID of 0.
@@ -793,11 +637,7 @@ class SessionTests: TestCaseBase {
 
         let trust_root = IdentityKeyPair.generate()
         let server_keys = IdentityKeyPair.generate()
-        let server_cert = try! ServerCertificate(
-            keyId: 1,
-            publicKey: server_keys.publicKey,
-            trustRoot: trust_root.privateKey
-        )
+        let server_cert = try! ServerCertificate(keyId: 1, publicKey: server_keys.publicKey, trustRoot: trust_root.privateKey)
         let sender_addr = try! SealedSenderAddress(
             e164: "+14151111111",
             uuidString: alice_address.name,
@@ -863,12 +703,8 @@ private func initializeSessionsV4(
 
     let bob_identity_key_pair = try! bob_store.identityKeyPair(context: NullContext())
     let bob_identity_key = bob_identity_key_pair.identityKey
-    let bob_signed_pre_key_signature = bob_identity_key_pair.privateKey.generateSignature(
-        message: bob_signed_pre_key_public
-    )
-    let bob_kyber_pre_key_signature = bob_identity_key_pair.privateKey.generateSignature(
-        message: bob_kyber_pre_key_public
-    )
+    let bob_signed_pre_key_signature = bob_identity_key_pair.privateKey.generateSignature(message: bob_signed_pre_key_public)
+    let bob_kyber_pre_key_signature = bob_identity_key_pair.privateKey.generateSignature(message: bob_kyber_pre_key_public)
 
     let prekey_id: UInt32 = 4570
     let signed_prekey_id: UInt32 = 3006

@@ -5,13 +5,12 @@
 
 package org.signal.libsignal.net;
 
-import java.util.Locale;
-import kotlin.Pair;
 import org.signal.libsignal.internal.CompletableFuture;
 import org.signal.libsignal.internal.Native;
 import org.signal.libsignal.internal.NativeTesting;
 import org.signal.libsignal.internal.TokioAsyncContext;
 import org.signal.libsignal.net.internal.BridgeChatListener;
+import org.signal.libsignal.protocol.util.Pair;
 
 /**
  * Represents an authenticated communication channel with the ChatConnection.
@@ -36,7 +35,6 @@ public class AuthenticatedChatConnection extends ChatConnection {
       final String username,
       final String password,
       final boolean receiveStories,
-      final Locale locale,
       ChatConnectionListener chatListener) {
     return tokioAsyncContext.guardedMap(
         asyncContextHandle ->
@@ -47,8 +45,7 @@ public class AuthenticatedChatConnection extends ChatConnection {
                             connectionManagerHandle,
                             username,
                             password,
-                            receiveStories,
-                            Network.languageCodesForLocale(locale))
+                            receiveStories)
                         .makeCancelable(tokioAsyncContext)
                         .thenApply(
                             nativeHandle ->

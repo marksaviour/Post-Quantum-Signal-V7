@@ -95,7 +95,7 @@ impl<T: ResultTypeInfo + std::panic::UnwindSafe> ResultReporter for FutureResult
                 std::mem::forget(value);
             }
             Err(err) => (promise.complete)(
-                err.into_raw_box_for_ffi(),
+                Box::into_raw(Box::new(err)),
                 std::ptr::null(),
                 promise.context,
             ),
@@ -118,7 +118,7 @@ impl<T: ResultTypeInfo + std::panic::UnwindSafe> ResultReporter for FutureResult
 /// # use libsignal_bridge_types::{AsyncRuntime, ResultReporter};
 /// # use libsignal_bridge_types::support::NoOpAsyncRuntime;
 /// # fn test(promise: &mut CPromise<i32>, async_runtime: &NoOpAsyncRuntime) {
-/// run_future_on_runtime(async_runtime, promise, "task", |_cancel| async {
+/// run_future_on_runtime(async_runtime, promise, |_cancel| async {
 ///     let result: i32 = 1 + 2;
 ///     // Do some complicated awaiting here.
 ///     FutureResultReporter::new(Ok(result))
@@ -128,7 +128,6 @@ impl<T: ResultTypeInfo + std::panic::UnwindSafe> ResultReporter for FutureResult
 pub fn run_future_on_runtime<R, F, O>(
     runtime: &R,
     promise: &mut CPromise<O::ResultType>,
-    label: &'static str,
     future: impl FnOnce(R::Cancellation) -> F,
 ) where
     R: AsyncRuntime<F>,
@@ -138,7 +137,7 @@ pub fn run_future_on_runtime<R, F, O>(
     O: ResultTypeInfo + 'static,
 {
     let completion = PromiseCompleter { promise: *promise };
-    let cancellation_id = runtime.run_future(future, completion, label);
+    let cancellation_id = runtime.run_future(future, completion);
     promise.cancellation_id = cancellation_id.into();
 }
 

@@ -7,13 +7,14 @@ package org.signal.libsignal.metadata.certificate;
 
 import junit.framework.TestCase;
 import org.signal.libsignal.protocol.InvalidKeyException;
+import org.signal.libsignal.protocol.ecc.Curve;
 import org.signal.libsignal.protocol.ecc.ECKeyPair;
 
 public class ServerCertificateTest extends TestCase {
 
   public void testSignature() throws InvalidKeyException, InvalidCertificateException {
-    ECKeyPair trustRoot = ECKeyPair.generate();
-    ECKeyPair keyPair = ECKeyPair.generate();
+    ECKeyPair trustRoot = Curve.generateKeyPair();
+    ECKeyPair keyPair = Curve.generateKeyPair();
     ServerCertificate certificate =
         new ServerCertificate(trustRoot.getPrivateKey(), 1, keyPair.getPublicKey());
 
@@ -24,8 +25,8 @@ public class ServerCertificateTest extends TestCase {
   }
 
   public void testBadSignature() throws Exception {
-    ECKeyPair trustRoot = ECKeyPair.generate();
-    ECKeyPair keyPair = ECKeyPair.generate();
+    ECKeyPair trustRoot = Curve.generateKeyPair();
+    ECKeyPair keyPair = Curve.generateKeyPair();
 
     ServerCertificate certificate =
         new ServerCertificate(trustRoot.getPrivateKey(), 1, keyPair.getPublicKey());

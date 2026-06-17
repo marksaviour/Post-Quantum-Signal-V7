@@ -38,8 +38,8 @@ impl NameStore {
             },
             Err(error) => Err(error
                 .to_string(cx)
-                .map(|s| s.value(cx))
-                .unwrap_or_else(|_: neon::result::Throw| "<unknown JavaScript error>".into())),
+                .expect("can convert to string")
+                .value(cx)),
         })
         .await
     }

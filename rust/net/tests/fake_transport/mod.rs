@@ -8,28 +8,25 @@ use std::fmt::Display;
 use std::net::Ipv6Addr;
 
 use const_str::ip_addr;
-use futures_util::Stream;
 use futures_util::stream::StreamExt as _;
+use futures_util::Stream;
 use itertools::Itertools as _;
-use libsignal_net::chat::{
-    self, ChatConnection, PendingChatConnection, RECOMMENDED_CHAT_WS_CONFIG,
-};
+use libsignal_net::chat::{self, ChatConnection, PendingChatConnection};
 use libsignal_net::connect_state::{
     ConnectState, ConnectionResources, DefaultConnectorFactory, DefaultTransportConnector,
     SUGGESTED_CONNECT_CONFIG,
 };
-use libsignal_net::env::constants::CHAT_WEBSOCKET_PATH;
 use libsignal_net::env::{ConnectionConfig, DomainConfig, UserAgent};
-use libsignal_net::infra::dns::DnsResolver;
 use libsignal_net::infra::dns::lookup_result::LookupResult;
+use libsignal_net::infra::dns::DnsResolver;
 use libsignal_net::infra::errors::TransportConnectError;
 use libsignal_net::infra::host::Host;
-use libsignal_net::infra::route::{ConnectorFactory, DEFAULT_HTTPS_PORT, DirectOrProxyProvider};
-pub use libsignal_net::infra::testutil::fake_transport::FakeTransportTarget;
-use libsignal_net::infra::{AsyncDuplexStream, EnableDomainFronting, OverrideNagleAlgorithm};
+use libsignal_net::infra::route::{ConnectorFactory, DirectOrProxyProvider, DEFAULT_HTTPS_PORT};
+use libsignal_net::infra::{
+    AsyncDuplexStream, DnsSource, EnableDomainFronting, RECOMMENDED_WS2_CONFIG,
+};
 use libsignal_net_infra::route::{Connector, TransportRoute, UsePreconnect};
-use libsignal_net_infra::utils::no_network_change_events;
-use libsignal_net_infra::ws::WebSocketTransportStream;
+use libsignal_net_infra::testutil::no_network_change_events;
 use tokio::time::Duration;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use warp::Filter as _;
@@ -44,11 +41,11 @@ pub use behavior::Behavior;
 mod connector;
 pub use connector::{FakeTransportConnector, TransportConnectEvent, TransportConnectEventStage};
 
+mod target;
+pub use target::FakeTransportTarget;
+
 /// Convenience alias for a dynamically-dispatched stream.
-///
-/// We use this for streams other than websocket transports, but [`WebSocketTransportStream`] is
-/// still a handy *maximal* set of requirements.
-pub type FakeStream = Box<dyn WebSocketTransportStream>;
+pub type FakeStream = Box<dyn AsyncDuplexStream>;
 
 /// Produces an iterator with just direct routes (without chaining domain fronted routes).
 pub fn only_direct_routes(
@@ -64,7 +61,6 @@ pub fn only_direct_routes(
                 hostname,
                 cert: _,
                 min_tls_version: _,
-                http_version: _,
                 confirmation_header_name: _,
                 proxy: _,
             },
@@ -110,7 +106,6 @@ pub fn allow_domain_fronting(
                 hostname: _,
                 cert: _,
                 min_tls_version: _,
-                http_version: _,
                 confirmation_header_name: _,
                 proxy,
             },
@@ -199,7 +194,9 @@ impl FakeDeps {
         &self.resolved_names
     }
 
-    pub async fn connect_chat(&self) -> Result<PendingChatConnection, chat::ConnectError> {
+    pub async fn connect_chat(
+        &self,
+    ) -> Result<PendingChatConnection<impl AsyncDuplexStream>, chat::ConnectError> {
         let Self {
             connect_state,
             dns_resolver,
@@ -207,6 +204,11 @@ impl FakeDeps {
             resolved_names: _,
             chat_domain_config,
         } = self;
+        let libsignal_net::infra::ws2::Config {
+            local_idle_timeout,
+            remote_idle_ping_timeout,
+            remote_idle_disconnect_timeout: _,
+        } = RECOMMENDED_WS2_CONFIG;
         let connection_resources = ConnectionResources {
             connect_state,
             dns_resolver,
@@ -216,13 +218,18 @@ impl FakeDeps {
 
         ChatConnection::start_connect_with_transport(
             connection_resources,
-            DirectOrProxyProvider::direct(chat_domain_config.connect.route_provider(
-                EnableDomainFronting::OneDomainPerProxy,
-                OverrideNagleAlgorithm::UseSystemDefault,
-            )),
-            CHAT_WEBSOCKET_PATH,
+            DirectOrProxyProvider::maybe_proxied(
+                chat_domain_config
+                    .connect
+                    .route_provider(EnableDomainFronting::OneDomainPerProxy),
+                None,
+            ),
             &UserAgent::with_libsignal_version("test"),
-            RECOMMENDED_CHAT_WS_CONFIG,
+            chat::ws2::Config {
+                local_idle_timeout,
+                remote_idle_timeout: remote_idle_ping_timeout,
+                initial_request_id: 0,
+            },
             None,
             "fake chat",
         )
@@ -265,7 +272,10 @@ fn fake_ips_for_names(domain_config: &DomainConfig) -> HashMap<&'static str, Loo
         .map(|(name, index)| {
             let mut segments = BASE_IP_ADDR.segments();
             *segments.last_mut().unwrap() = index;
-            (name, LookupResult::new(vec![], vec![segments.into()]))
+            (
+                name,
+                LookupResult::new(DnsSource::Test, vec![], vec![segments.into()]),
+            )
         })
         .collect()
 }
@@ -279,12 +289,10 @@ pub async fn connect_websockets_on_incoming<S: AsyncDuplexStream + 'static, T: D
             std::future::pending()
         })
     });
-    let mut incoming_streams = std::pin::pin!(incoming_streams);
-    while let Some((host, stream)) = incoming_streams.next().await {
-        log::info!("serving websocket to {host}");
-        tokio::spawn(hyper::server::conn::http1::Builder::new().serve_connection(
-            hyper_util::rt::TokioIo::new(stream),
-            hyper_util::service::TowerToHyperService::new(warp::service(filter)),
-        ));
-    }
+    warp::serve(filter)
+        .run_incoming(incoming_streams.map(|(host, stream)| {
+            log::info!("serving websocket to {host}");
+            Ok::<_, std::io::Error>(stream)
+        }))
+        .await
 }

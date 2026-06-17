@@ -3,12 +3,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-use std::convert::Infallible;
-
 use async_trait::async_trait;
-use libsignal_core::{Aci, ServiceId};
+use libsignal_core::Aci;
 
-use super::{AllowRateLimitChallenges, RequestError, UserBasedAuthorization};
+use super::{RequestError, UserBasedAuthorization};
 
 #[derive(Debug, displaydoc::Display)]
 pub enum ProfileKeyCredentialRequestError {
@@ -20,9 +18,6 @@ pub enum ProfileKeyCredentialRequestError {
 
 #[async_trait]
 pub trait UnauthenticatedChatApi {
-    // Not intended to be overridden.
-    const ALLOW_RATE_LIMIT_CHALLENGES: AllowRateLimitChallenges = AllowRateLimitChallenges::No;
-
     async fn get_profile_key_credential(
         &self,
         peer_aci: Aci,
@@ -33,13 +28,4 @@ pub trait UnauthenticatedChatApi {
         zkgroup::profiles::ExpiringProfileKeyCredentialResponse,
         RequestError<ProfileKeyCredentialRequestError>,
     >;
-}
-
-// TODO: once we implement a grpc backend for UnauthenticatedChatApi, merge this trait into that.
-#[async_trait]
-pub trait UnauthenticatedAccountExistenceApi<T> {
-    // Not intended to be overridden.
-    const ALLOW_RATE_LIMIT_CHALLENGES: AllowRateLimitChallenges = AllowRateLimitChallenges::No;
-
-    async fn account_exists(&self, account: ServiceId) -> Result<bool, RequestError<Infallible>>;
 }

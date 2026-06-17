@@ -33,15 +33,17 @@ pub enum SignalProtocolError {
     /// unrecognized message version <{0}>
     UnrecognizedMessageVersion(u32),
 
+    /// fingerprint version number mismatch them {0} us {1}
+    FingerprintVersionMismatch(u32, u32),
+    /// fingerprint parsing error
+    FingerprintParsingError,
+
     /// no key type identifier
     NoKeyTypeIdentifier,
     /// bad key type <{0:#04x}>
     BadKeyType(u8),
     /// bad key length <{1}> for key with type <{0}>
     BadKeyLength(KeyType, usize),
-
-    /// invalid key agreement
-    InvalidKeyAgreement,
 
     /// invalid signature detected
     SignatureValidationFailed,
@@ -62,8 +64,6 @@ pub enum SignalProtocolError {
     /// missing sender key state for distribution ID {distribution_id}
     NoSenderKeyState { distribution_id: Uuid },
 
-    /// protocol address is invalid: {name}.{device_id}
-    InvalidProtocolAddress { name: String, device_id: u32 },
     /// session with {0} not found
     SessionNotFound(crate::ProtocolAddress),
     /// invalid session: {0}
@@ -92,8 +92,6 @@ pub enum SignalProtocolError {
     UnknownSealedSenderVersion(u8),
     /// self send of a sealed sender message
     SealedSenderSelfSend,
-    /// unknown server certificate ID: {0}
-    UnknownSealedSenderServerCertificateId(u32),
 
     /// bad KEM key type <{0:#04x}>
     BadKEMKeyType(u8),
@@ -121,7 +119,6 @@ impl From<CurveError> for SignalProtocolError {
             CurveError::NoKeyTypeIdentifier => Self::NoKeyTypeIdentifier,
             CurveError::BadKeyType(raw) => Self::BadKeyType(raw),
             CurveError::BadKeyLength(key_type, len) => Self::BadKeyLength(key_type, len),
-            CurveError::InvalidKeyAgreement => Self::InvalidKeyAgreement,
         }
     }
 }

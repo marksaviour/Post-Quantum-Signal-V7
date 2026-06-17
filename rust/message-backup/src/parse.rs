@@ -3,8 +3,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+use std::fmt::Debug;
+
 use arrayvec::ArrayVec;
 use futures::io::{AsyncRead, AsyncReadExt as _};
+
+#[derive(Debug, displaydoc::Display, thiserror::Error)]
+pub enum ParseError {
+    /// io: {0}
+    Io(#[from] std::io::Error),
+    /// proto decode error: {0}
+    Decode(#[from] protobuf::Error),
+}
 
 const VARINT_MAX_LENGTH: usize = 10;
 
@@ -21,7 +31,7 @@ impl<R: AsyncRead + Unpin> VarintDelimitedReader<R> {
         }
     }
 
-    pub async fn read_next(&mut self) -> Result<Option<Box<[u8]>>, std::io::Error> {
+    pub async fn read_next(&mut self) -> Result<Option<Box<[u8]>>, ParseError> {
         let length = match self.read_next_varint().await? {
             None => return Ok(None),
             Some(length) => length,
@@ -46,14 +56,10 @@ impl<R: AsyncRead + Unpin> VarintDelimitedReader<R> {
 
     /// Consumes self, returning the inner [`AsyncRead`]er.
     pub fn into_inner(self) -> R {
-        assert!(
-            self.buffer.is_empty(),
-            "would lose data to convert to the inner reader"
-        );
         self.reader
     }
 
-    async fn read_next_varint(&mut self) -> Result<Option<usize>, std::io::Error> {
+    async fn read_next_varint(&mut self) -> Result<Option<usize>, ParseError> {
         let Self { buffer, reader } = self;
 
         fill_buffer_from_reader(reader, buffer).await?;
@@ -64,7 +70,11 @@ impl<R: AsyncRead + Unpin> VarintDelimitedReader<R> {
 
         let mut proto_reader = protobuf::CodedInputStream::from_bytes(buffer);
 
-        let length = proto_reader.read_raw_varint32()?;
+        let length = proto_reader
+            .read_raw_varint32()
+            .map_err(|_: protobuf::Error| {
+                std::io::Error::from(std::io::ErrorKind::UnexpectedEof)
+            })?;
 
         // Remove the consumed bytes from the buffer.
         let consumed_byte_count: usize =
@@ -83,7 +93,7 @@ impl<R: AsyncRead + Unpin> VarintDelimitedReader<R> {
 async fn fill_buffer_from_reader<R: AsyncRead + Unpin, const N: usize>(
     reader: &mut R,
     buffer: &mut ArrayVec<u8, N>,
-) -> Result<(), std::io::Error> {
+) -> Result<(), ParseError> {
     // First fill up the buffer with zeros so it can be treated as a slice.
     // Keep track of how many bytes in the buffer have actually been read
     // from the reader.
@@ -145,7 +155,7 @@ mod test {
 
         assert_matches!(
             block_on(reader.read_next()),
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof
+            Err(ParseError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof
         );
     }
     struct MessageAndLen<const L: usize, const M: usize> {

@@ -6,7 +6,7 @@
 use std::time::{Duration, SystemTime};
 
 use const_str::hex;
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, Criterion};
 use libsignal_keytrans::{
     ChatSearchResponse, DeploymentMode, FullSearchResponse, KeyTransparency, PublicConfig,
     SearchContext, SlimSearchRequest, VerifyingKey, VrfPublicKey,
@@ -53,11 +53,10 @@ fn bench_verify_search(c: &mut Criterion) {
         tree_head: response_tree_head,
     };
 
-    let valid_at = SystemTime::UNIX_EPOCH + include!("../res/chat_response_valid_at.in");
-
+    let valid_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1746042060);
     let kt = KeyTransparency {
         config: PublicConfig {
-            mode: DeploymentMode::ThirdPartyAuditing(vec![auditor_key].into()),
+            mode: DeploymentMode::ThirdPartyAuditing(auditor_key),
             signature_key: sig_key,
             vrf_key,
         },

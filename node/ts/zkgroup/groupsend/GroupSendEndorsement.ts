@@ -3,19 +3,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import ByteArray, { UNCHECKED_AND_UNCLONED } from '../internal/ByteArray.js';
-import * as Native from '../../Native.js';
+import ByteArray, { UNCHECKED_AND_UNCLONED } from '../internal/ByteArray';
+import * as Native from '../../../Native';
 
-import GroupSecretParams from '../groups/GroupSecretParams.js';
-import GroupSendFullToken from './GroupSendFullToken.js';
-import GroupSendToken from './GroupSendToken.js';
+import GroupSecretParams from '../groups/GroupSecretParams';
+import GroupSendFullToken from './GroupSendFullToken';
+import GroupSendToken from './GroupSendToken';
 
 // For docs
 import type {
   default as GroupSendEndorsementsResponse,
   ReceivedEndorsements,
-} from './GroupSendEndorsementsResponse.js';
-import CallLinkSecretParams from '../calllinks/CallLinkSecretParams.js';
+} from './GroupSendEndorsementsResponse';
+import CallLinkSecretParams from '../calllinks/CallLinkSecretParams';
 
 /**
  * An endorsement for a user or set of users in a group.
@@ -45,7 +45,7 @@ import CallLinkSecretParams from '../calllinks/CallLinkSecretParams.js';
  * it's still cheaper than a usual zkgroup presentation.)
  */
 export default class GroupSendEndorsement extends ByteArray {
-  constructor(contents: Uint8Array, marker?: typeof UNCHECKED_AND_UNCLONED) {
+  constructor(contents: Buffer, marker?: typeof UNCHECKED_AND_UNCLONED) {
     super(contents, marker ?? Native.GroupSendEndorsement_CheckValidContents);
   }
 

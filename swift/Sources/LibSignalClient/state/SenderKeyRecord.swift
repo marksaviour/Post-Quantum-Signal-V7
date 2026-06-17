@@ -7,32 +7,27 @@ import Foundation
 import SignalFfi
 
 public class SenderKeyRecord: ClonableHandleOwner<SignalMutPointerSenderKeyRecord> {
-    override internal class func destroyNativeHandle(
-        _ handle: NonNull<SignalMutPointerSenderKeyRecord>
-    ) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerSenderKeyRecord>) -> SignalFfiErrorRef? {
         return signal_sender_key_record_destroy(handle.pointer)
     }
 
-    override internal class func cloneNativeHandle(
-        _ newHandle: inout SignalMutPointerSenderKeyRecord,
-        currentHandle: SignalConstPointerSenderKeyRecord
-    ) -> SignalFfiErrorRef? {
+    override internal class func cloneNativeHandle(_ newHandle: inout SignalMutPointerSenderKeyRecord, currentHandle: SignalConstPointerSenderKeyRecord) -> SignalFfiErrorRef? {
         return signal_sender_key_record_clone(&newHandle, currentHandle)
     }
 
     public convenience init<Bytes: ContiguousBytes>(bytes: Bytes) throws {
-        let handle = try bytes.withUnsafeBorrowedBuffer { bytes in
-            try invokeFnReturningValueByPointer(.init()) {
-                signal_sender_key_record_deserialize($0, bytes)
-            }
+        let handle = try bytes.withUnsafeBorrowedBuffer {
+            var result = SignalMutPointerSenderKeyRecord()
+            try checkError(signal_sender_key_record_deserialize(&result, $0))
+            return result
         }
         self.init(owned: NonNull(handle)!)
     }
 
-    public func serialize() -> Data {
+    public func serialize() -> [UInt8] {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningData {
+                try invokeFnReturningArray {
                     signal_sender_key_record_serialize($0, nativeHandle.const())
                 }
             }

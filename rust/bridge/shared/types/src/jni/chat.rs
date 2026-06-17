@@ -5,15 +5,42 @@
 
 use std::panic::UnwindSafe;
 
-use futures_util::FutureExt;
+use bytes::Bytes;
 use futures_util::future::BoxFuture;
+use futures_util::FutureExt;
+use libsignal_net::chat::server_requests::DisconnectCause;
 use libsignal_net::chat::ChatConnection;
-use libsignal_net_chat::api::Unauth;
 
 use super::*;
-// TODO: This re-export is because of the jni_arg_type macro expecting all bridging structs to be
-// under the jni module; eventually we should be able to remove it.
-pub use crate::net::chat::{JavaBridgeChatListener, JavaBridgeProvisioningListener};
+use crate::net::chat::{ChatListener, ServerMessageAck};
+
+pub type JavaBridgeChatListener<'a> = JObject<'a>;
+
+pub struct JniBridgeChatListener(JniChatListener);
+
+impl JniBridgeChatListener {
+    pub fn new(env: &mut JNIEnv<'_>, listener: &JObject) -> Result<Self, BridgeLayerError> {
+        check_jobject_type(
+            env,
+            listener,
+            ClassName("org.signal.libsignal.net.internal.BridgeChatListener"),
+        )?;
+        Ok(Self(JniChatListener {
+            vm: env.get_java_vm().expect("can get VM"),
+            listener: env.new_global_ref(listener).expect("can get env"),
+        }))
+    }
+
+    pub(crate) fn into_listener(self) -> Box<dyn ChatListener> {
+        let Self(listener) = self;
+        Box::new(listener)
+    }
+}
+
+struct JniChatListener {
+    vm: JavaVM,
+    listener: GlobalRef,
+}
 
 fn attach_and_log_on_error(
     vm: &JavaVM,
@@ -22,17 +49,92 @@ fn attach_and_log_on_error(
 ) {
     let attach_and_run = move || {
         let mut env = vm.attach_current_thread().expect("can attach thread");
-        env.with_local_frame(REASONABLE_JNI_BACKGROUND_THREAD_FRAME_SIZE, |env| {
-            Ok(operation(env))
-        })
-        .check_exceptions(&mut env, name)
-        .unwrap_or_else(Err)
+        operation(&mut env)
     };
     match attach_and_run() {
         Ok(()) => {}
         Err(e) => {
             log::error!("failed to report {name}: {e}")
         }
+    }
+}
+
+impl ChatListener for JniChatListener {
+    fn received_incoming_message(
+        &mut self,
+        envelope: Bytes,
+        timestamp: Timestamp,
+        ack: ServerMessageAck,
+    ) {
+        let listener = &self.listener;
+        attach_and_log_on_error(&self.vm, "incoming message", move |env| {
+            let env_array = envelope.convert_into(env)?;
+            let ack_handle = ack.convert_into(env)?;
+            call_method_checked(
+                env,
+                listener,
+                "onIncomingMessage",
+                jni_args!((
+                    env_array => [byte],
+                    timestamp.epoch_millis() as i64 => long,
+                    ack_handle => long,
+                ) -> void),
+            )
+        });
+    }
+
+    fn received_queue_empty(&mut self) {
+        let listener = &self.listener;
+        attach_and_log_on_error(&self.vm, "queue empty", move |env| {
+            call_method_checked(env, listener, "onQueueEmpty", jni_args!(() -> void))
+        });
+    }
+
+    fn received_alerts(&mut self, alerts: Vec<String>) {
+        let listener = &self.listener;
+        attach_and_log_on_error(&self.vm, "received alerts", move |env| {
+            let alerts = alerts.into_boxed_slice().convert_into(env)?;
+            call_method_checked(
+                env,
+                listener,
+                "onReceivedAlerts",
+                jni_args!((alerts => [java.lang.String]) -> void),
+            )
+        });
+    }
+
+    fn connection_interrupted(&mut self, disconnect_cause: DisconnectCause) {
+        let listener = &self.listener;
+        attach_and_log_on_error(&self.vm, "connection interrupted", move |env| {
+            let throw_exception = move |env, listener, throwable: JThrowable<'_>| {
+                call_method_checked(
+                    env,
+                    listener,
+                    "onConnectionInterrupted",
+                    jni_args!((throwable => java.lang.Throwable) -> void),
+                )?;
+                Ok(())
+            };
+            match disconnect_cause {
+                DisconnectCause::LocalDisconnect => {
+                    throw_exception(env, listener, JObject::null().into())?
+                }
+                DisconnectCause::Error(disconnect_cause) => convert_to_exception(
+                    env,
+                    SignalJniError::from(disconnect_cause),
+                    move |env, throwable, _error| {
+                        throwable
+                            .and_then(|throwable| throw_exception(env, listener, throwable))
+                            .unwrap_or_else(|error| {
+                                log::error!(
+                                    "failed to call onConnectionInterrupted with cause: {error}"
+                                );
+                            });
+                    },
+                ),
+            };
+            Ok(())
+        });
     }
 }
 
@@ -72,8 +174,7 @@ impl crate::net::registration::ConnectChatBridge for JniConnectChatBridge {
     fn create_chat_connector(
         self: Box<Self>,
         runtime: tokio::runtime::Handle,
-    ) -> Box<dyn libsignal_net_chat::registration::ConnectUnauthChat + Send + Sync + UnwindSafe>
-    {
+    ) -> Box<dyn libsignal_net::registration::ConnectChat + Send + Sync + UnwindSafe> {
         Box::new(JniConnectChat {
             tokio_runtime: runtime,
             bridge: *self,
@@ -81,11 +182,11 @@ impl crate::net::registration::ConnectChatBridge for JniConnectChatBridge {
     }
 }
 
-impl libsignal_net_chat::registration::ConnectUnauthChat for JniConnectChat {
+impl libsignal_net::registration::ConnectChat for JniConnectChat {
     fn connect_chat(
         &self,
         on_disconnect: tokio::sync::oneshot::Sender<std::convert::Infallible>,
-    ) -> BoxFuture<'_, Result<Unauth<ChatConnection>, ChatConnectError>> {
+    ) -> BoxFuture<'_, Result<ChatConnection, ChatConnectError>> {
         let Self {
             bridge:
                 JniConnectChatBridge {

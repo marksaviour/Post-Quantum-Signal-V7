@@ -5,9 +5,9 @@
 
 use std::io::Read;
 
-use base64::prelude::{BASE64_STANDARD, Engine};
+use base64::prelude::{Engine, BASE64_STANDARD};
 use rand::Rng;
-use zkgroup::{RANDOMNESS_LEN, ServerSecretParams};
+use zkgroup::{ServerSecretParams, RANDOMNESS_LEN};
 
 fn main() {
     let mut old_secret_base64 = String::new();

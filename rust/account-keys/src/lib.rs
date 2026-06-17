@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-#![warn(clippy::unwrap_used)]
-
 mod backup;
 mod error;
 mod hash;
@@ -13,10 +11,10 @@ use core::{fmt, str};
 
 pub use backup::*;
 pub use error::{Error, Result};
-pub use hash::{PinHash, local_pin_hash, verify_local_pin_hash};
+pub use hash::{local_pin_hash, verify_local_pin_hash, PinHash};
 use hkdf::Hkdf;
-use rand::Rng;
 use rand::distr::slice;
+use rand::Rng;
 use sha2::Sha256;
 
 pub const SVR_KEY_LEN: usize = 32;
@@ -33,7 +31,7 @@ impl AccountEntropyPool {
     const ALPHABET: &'static [u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
 
     pub fn generate(rng: &mut impl Rng) -> AccountEntropyPool {
-        let alphabet_dist = slice::Choose::new(Self::ALPHABET).expect("non-empty");
+        let alphabet_dist = slice::Choose::new(Self::ALPHABET).unwrap();
         let entropy_pool: [u8; Self::LENGTH] = std::array::from_fn(|_| *rng.sample(alphabet_dist));
         Self { entropy_pool }
     }

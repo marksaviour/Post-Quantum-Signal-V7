@@ -9,7 +9,7 @@ import SignalFfi
 public class ProfileKey: ByteArray, @unchecked Sendable {
     public static let SIZE: Int = 32
 
-    public required init(contents: Data) throws {
+    public required init(contents: [UInt8]) throws {
         try super.init(newContents: contents, expectedLength: ProfileKey.SIZE)
     }
 
@@ -33,7 +33,7 @@ public class ProfileKey: ByteArray, @unchecked Sendable {
         }
     }
 
-    public func deriveAccessKey() -> Data {
+    public func deriveAccessKey() -> [UInt8] {
         return failOnError {
             try withUnsafePointerToSerialized { contents in
                 try invokeFnReturningFixedLengthArray {

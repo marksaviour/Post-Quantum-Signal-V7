@@ -17,21 +17,18 @@ use crate::certs::RootCertificates;
 use crate::dns::custom_resolver::CustomDnsResolver;
 use crate::dns::dns_errors::Error;
 use crate::dns::dns_lookup::{DnsLookup, DnsLookupRequest, StaticDnsMap, SystemDnsLookup};
-use crate::dns::dns_transport_doh::{CLOUDFLARE_IPS, DohTransportConnectorFactory};
+use crate::dns::dns_transport_doh::{DohTransportConnectorFactory, CLOUDFLARE_IPS};
 use crate::dns::dns_types::ResourceType;
 use crate::dns::dns_utils::log_safe_domain;
 use crate::dns::lookup_result::LookupResult;
 use crate::host::Host;
 use crate::route::{
-    DEFAULT_HTTPS_PORT, HttpRouteFragment, HttpVersion, HttpsTlsRoute, TcpRoute, TlsRoute,
-    TlsRouteFragment,
+    HttpRouteFragment, HttpsTlsRoute, TcpRoute, TlsRoute, TlsRouteFragment, DEFAULT_HTTPS_PORT,
 };
-use crate::timeouts::{
-    DNS_LATER_RESPONSE_GRACE_PERIOD, DNS_SYSTEM_LOOKUP_TIMEOUT, DOH_FALLBACK_LOOKUP_TIMEOUT,
-};
-use crate::utils::NetworkChangeEvent;
+use crate::timeouts::{DNS_SYSTEM_LOOKUP_TIMEOUT, DOH_FALLBACK_LOOKUP_TIMEOUT};
 use crate::utils::oneshot_broadcast::{self, Receiver};
-use crate::{Alpn, OverrideNagleAlgorithm, utils};
+use crate::utils::NetworkChangeEvent;
+use crate::{utils, Alpn};
 
 pub mod custom_resolver;
 mod dns_errors;
@@ -97,7 +94,6 @@ struct LookupOption {
 
 pub fn build_custom_resolver_cloudflare_doh(
     network_change_event: &NetworkChangeEvent,
-    secondary_request_grace_period: Duration,
 ) -> CustomDnsResolver<HttpsTlsRoute<TlsRoute<TcpRoute<IpAddr>>>, DohTransportConnectorFactory> {
     let (v4, v6) = CLOUDFLARE_IPS;
     let targets = [IpAddr::V6(v6), IpAddr::V4(v4)].map(|ip_addr| {
@@ -107,7 +103,6 @@ pub fn build_custom_resolver_cloudflare_doh(
                 path_prefix: "".into(),
                 front_name: None,
                 host_header: Arc::from(host.to_string()),
-                http_version: Some(HttpVersion::Http2),
             },
             inner: TlsRoute {
                 fragment: TlsRouteFragment {
@@ -119,7 +114,6 @@ pub fn build_custom_resolver_cloudflare_doh(
                 inner: TcpRoute {
                     address: ip_addr,
                     port: DEFAULT_HTTPS_PORT,
-                    override_nagle_algorithm: OverrideNagleAlgorithm::UseSystemDefault,
                 },
             },
         }
@@ -128,7 +122,6 @@ pub fn build_custom_resolver_cloudflare_doh(
         targets.into(),
         DohTransportConnectorFactory,
         network_change_event,
-        secondary_request_grace_period,
     )
 }
 
@@ -156,8 +149,8 @@ impl DnsResolver {
 
     /// Creates a DNS resolver that will only use a provided static map
     /// to resolve DNS lookups
-    #[cfg(feature = "test-util")]
-    pub fn new_from_static_map(static_map: HashMap<&'static str, LookupResult>) -> Self {
+    #[cfg_attr(feature = "test-util", visibility::make(pub))]
+    pub(crate) fn new_from_static_map(static_map: HashMap<&'static str, LookupResult>) -> Self {
         DnsResolver {
             lookup_options: Arc::new([LookupOption {
                 lookup: Box::new(StaticDnsMap(static_map)),
@@ -174,15 +167,11 @@ impl DnsResolver {
         static_map: HashMap<&'static str, LookupResult>,
         network_change_event: &NetworkChangeEvent,
     ) -> Self {
-        let cloudflare_doh = Box::new(build_custom_resolver_cloudflare_doh(
-            network_change_event,
-            DNS_LATER_RESPONSE_GRACE_PERIOD,
-        ));
+        let cloudflare_doh = Box::new(build_custom_resolver_cloudflare_doh(network_change_event));
 
         let known_good_results = Arc::new(
             static_map
                 .iter()
-                .filter(|(_host, result)| !result.is_empty())
                 .map(|(host, result)| (*host, HashSet::from_iter(result)))
                 .collect(),
         );
@@ -234,7 +223,11 @@ impl DnsResolver {
                 std::net::IpAddr::V4(ip) => (vec![ip], vec![]),
                 std::net::IpAddr::V6(ip) => (vec![], vec![ip]),
             };
-            return Ok(LookupResult { ipv4, ipv6 });
+            return Ok(LookupResult {
+                source: super::DnsSource::Static,
+                ipv4,
+                ipv6,
+            });
         }
         match self.start_or_join_lookup(hostname).val().await {
             Ok(r) => r,
@@ -379,6 +372,7 @@ mod test {
     use crate::dns::dns_lookup::DnsLookupRequest;
     use crate::dns::{DnsLookup, DnsResolver, Error, LookupResult, StaticDnsMap};
     use crate::utils::{sleep_and_catch_up, timed};
+    use crate::DnsSource;
 
     const IPV4: Ipv4Addr = ip_addr!(v4, "192.0.2.1");
     const IPV6: Ipv6Addr = ip_addr!(v6, "3fff::1");
@@ -394,19 +388,19 @@ mod test {
 
     impl From<Ipv4Addr> for LookupResult {
         fn from(value: Ipv4Addr) -> Self {
-            LookupResult::new(vec![value], vec![])
+            LookupResult::new(DnsSource::Test, vec![value], vec![])
         }
     }
 
     impl From<Ipv6Addr> for LookupResult {
         fn from(value: Ipv6Addr) -> Self {
-            LookupResult::new(vec![], vec![value])
+            LookupResult::new(DnsSource::Test, vec![], vec![value])
         }
     }
 
     impl From<(Ipv4Addr, Ipv6Addr)> for LookupResult {
         fn from(value: (Ipv4Addr, Ipv6Addr)) -> Self {
-            LookupResult::new(vec![value.0], vec![value.1])
+            LookupResult::new(DnsSource::Test, vec![value.0], vec![value.1])
         }
     }
 

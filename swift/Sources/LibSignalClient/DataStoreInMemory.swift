@@ -15,9 +15,7 @@ private struct SenderKeyName: Hashable {
     var distributionId: UUID
 }
 
-open class InMemorySignalProtocolStore: IdentityKeyStore, PreKeyStore, SignedPreKeyStore, KyberPreKeyStore,
-    SessionStore, SenderKeyStore
-{
+open class InMemorySignalProtocolStore: IdentityKeyStore, PreKeyStore, SignedPreKeyStore, KyberPreKeyStore, SessionStore, SenderKeyStore {
     private var publicKeys: [ProtocolAddress: IdentityKey] = [:]
     private var privateKey: IdentityKeyPair
     private var registrationId: UInt32
@@ -25,7 +23,6 @@ open class InMemorySignalProtocolStore: IdentityKeyStore, PreKeyStore, SignedPre
     private var signedPrekeyMap: [UInt32: SignedPreKeyRecord] = [:]
     private var kyberPrekeyMap: [UInt32: KyberPreKeyRecord] = [:]
     private var kyberPrekeysUsed: Set<UInt32> = []
-    private var baseKeysSeen: [UInt64: [PublicKey]] = [:]
     private var sessionMap: [ProtocolAddress: SessionRecord] = [:]
     private var senderKeyMap: [SenderKeyName: SenderKeyRecord] = [:]
 
@@ -47,11 +44,7 @@ open class InMemorySignalProtocolStore: IdentityKeyStore, PreKeyStore, SignedPre
         return self.registrationId
     }
 
-    open func saveIdentity(
-        _ identity: IdentityKey,
-        for address: ProtocolAddress,
-        context: StoreContext
-    ) throws -> IdentityChange {
+    open func saveIdentity(_ identity: IdentityKey, for address: ProtocolAddress, context: StoreContext) throws -> IdentityChange {
         let oldIdentity = self.publicKeys.updateValue(identity, forKey: address)
         if oldIdentity == nil || oldIdentity == identity {
             return .newOrUnchanged
@@ -60,16 +53,11 @@ open class InMemorySignalProtocolStore: IdentityKeyStore, PreKeyStore, SignedPre
         }
     }
 
-    open func isTrustedIdentity(
-        _ identity: IdentityKey,
-        for address: ProtocolAddress,
-        direction: Direction,
-        context: StoreContext
-    ) throws -> Bool {
+    open func isTrustedIdentity(_ identity: IdentityKey, for address: ProtocolAddress, direction: Direction, context: StoreContext) throws -> Bool {
         if let pk = publicKeys[address] {
             return pk == identity
         } else {
-            return true  // tofu
+            return true // tofu
         }
     }
 
@@ -117,13 +105,7 @@ open class InMemorySignalProtocolStore: IdentityKeyStore, PreKeyStore, SignedPre
         self.kyberPrekeyMap[id] = record
     }
 
-    open func markKyberPreKeyUsed(id: UInt32, signedPreKeyId: UInt32, baseKey: PublicKey, context: StoreContext) throws
-    {
-        let bothKeyIds = (UInt64(id) << 32) | UInt64(signedPreKeyId)
-        if baseKeysSeen[bothKeyIds, default: []].contains(baseKey) {
-            throw SignalError.invalidMessage("reused base key")
-        }
-        baseKeysSeen[bothKeyIds, default: []].append(baseKey)
+    open func markKyberPreKeyUsed(id: UInt32, context: StoreContext) throws {
         self.kyberPrekeysUsed.insert(id)
     }
 
@@ -144,20 +126,11 @@ open class InMemorySignalProtocolStore: IdentityKeyStore, PreKeyStore, SignedPre
         self.sessionMap[address] = record
     }
 
-    open func storeSenderKey(
-        from sender: ProtocolAddress,
-        distributionId: UUID,
-        record: SenderKeyRecord,
-        context: StoreContext
-    ) throws {
+    open func storeSenderKey(from sender: ProtocolAddress, distributionId: UUID, record: SenderKeyRecord, context: StoreContext) throws {
         self.senderKeyMap[SenderKeyName(sender: sender, distributionId: distributionId)] = record
     }
 
-    open func loadSenderKey(
-        from sender: ProtocolAddress,
-        distributionId: UUID,
-        context: StoreContext
-    ) throws -> SenderKeyRecord? {
+    open func loadSenderKey(from sender: ProtocolAddress, distributionId: UUID, context: StoreContext) throws -> SenderKeyRecord? {
         return self.senderKeyMap[SenderKeyName(sender: sender, distributionId: distributionId)]
     }
 }

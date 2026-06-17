@@ -6,107 +6,290 @@
 #![allow(clippy::missing_safety_doc)]
 #![warn(clippy::unwrap_used)]
 
-use std::ffi::{CString, c_char, c_uchar};
+use std::ffi::{c_char, c_uchar, CString};
+use std::panic::AssertUnwindSafe;
 
-use libsignal_bridge::ffi::{self, *};
-use libsignal_bridge::{IllegalArgumentError, ffi_arg_type};
-use libsignal_bridge_macros::bridge_fn;
+use libsignal_bridge::ffi::*;
 #[cfg(feature = "libsignal-bridge-testing")]
 #[allow(unused_imports)]
 use libsignal_bridge_testing::*;
+use libsignal_core::try_scoped;
+use libsignal_protocol::*;
 
-pub mod error;
 pub mod logging;
 
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn signal_print_ptr(p: *const std::ffi::c_void) {
     println!("In rust that's {p:?}");
 }
 
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn signal_free_string(buf: *const c_char) {
     if buf.is_null() {
         return;
     }
-    drop(unsafe { CString::from_raw(buf as _) });
+    drop(CString::from_raw(buf as _));
 }
 
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn signal_free_buffer(buf: *const c_uchar, buf_len: usize) {
     if buf.is_null() {
         return;
     }
-    drop(unsafe {
-        Box::from_raw(std::ptr::slice_from_raw_parts_mut(
-            buf as *mut c_uchar,
-            buf_len,
-        ))
-    });
+    drop(Box::from_raw(std::slice::from_raw_parts_mut(
+        buf as *mut c_uchar,
+        buf_len,
+    )));
 }
 
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn signal_free_list_of_strings(buffer: OwnedBufferOf<CStringPtr>) {
-    let strings = unsafe { buffer.into_box() };
+    let strings = buffer.into_box();
     for &s in &*strings {
-        unsafe { signal_free_string(s) };
+        signal_free_string(s);
     }
     drop(strings);
 }
 
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn signal_free_list_of_register_response_badges(
     buffer: OwnedBufferOf<FfiRegisterResponseBadge>,
 ) {
-    for badge in unsafe { buffer.into_box() } {
+    for badge in buffer.into_box() {
         let FfiRegisterResponseBadge {
             id,
             visible,
             expiration_secs,
         } = badge;
-        unsafe { signal_free_string(id) };
+        signal_free_string(id);
         let _: (bool, f64) = (visible, expiration_secs);
     }
 }
 
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn signal_free_lookup_response_entry_list(
     buffer: OwnedBufferOf<crate::FfiCdsiLookupResponseEntry>,
 ) {
-    drop(unsafe { buffer.into_box() })
+    drop(buffer.into_box())
 }
 
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn signal_free_bytestring_array(array: BytestringArray) {
-    drop(unsafe { array.into_boxed_parts() })
+    drop(array.into_boxed_parts())
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn signal_free_list_of_service_ids(
-    buffer: OwnedBufferOf<libsignal_core::ServiceIdFixedWidthBinaryBytes>,
-) {
-    drop(unsafe { buffer.into_box() })
-}
+#[no_mangle]
+pub unsafe extern "C" fn signal_error_get_message(
+    err: *const SignalFfiError,
+    out: *mut *const c_char,
+) -> *mut SignalFfiError {
+    let result = try_scoped(|| {
+        let err = err.as_ref().ok_or(NullPointerError)?;
+        write_result_to(out, err.to_string())
+    });
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn signal_free_list_of_mismatched_device_errors(
-    buffer: OwnedBufferOf<FfiMismatchedDevicesError>,
-) {
-    let entries = unsafe { buffer.into_box() };
-    for mut entry in entries {
-        unsafe { entry.free_buffers() };
+    match result {
+        Ok(()) => std::ptr::null_mut(),
+        Err(e) => Box::into_raw(Box::new(e)),
     }
-    // The for-in loop already consumed 'entries'; our work is done.
 }
 
-#[unsafe(no_mangle)]
+#[no_mangle]
+pub unsafe extern "C" fn signal_error_get_address(
+    err: *const SignalFfiError,
+    out: *mut MutPointer<ProtocolAddress>,
+) -> *mut SignalFfiError {
+    let err = AssertUnwindSafe(err);
+    run_ffi_safe(|| {
+        let err = err.as_ref().ok_or(NullPointerError)?;
+        let value = err.provide_address().map_err(|_| {
+            SignalProtocolError::InvalidArgument(format!("cannot get address from error ({err})"))
+        })?;
+        write_result_to(out, value)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn signal_error_get_uuid(
+    err: *const SignalFfiError,
+    out: *mut [u8; 16],
+) -> *mut SignalFfiError {
+    let err = AssertUnwindSafe(err);
+    run_ffi_safe(|| {
+        let err = err.as_ref().ok_or(NullPointerError)?;
+        let value = err.provide_uuid().map_err(|_| {
+            SignalProtocolError::InvalidArgument(format!("cannot get UUID from error ({err})"))
+        })?;
+        write_result_to(out, value.into_bytes())
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn signal_error_get_type(err: *const SignalFfiError) -> u32 {
+    match err.as_ref() {
+        Some(err) => err.code() as u32,
+        None => 0,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn signal_error_get_retry_after_seconds(
+    err: *const SignalFfiError,
+    out: *mut u32,
+) -> *mut SignalFfiError {
+    let err = AssertUnwindSafe(err);
+    run_ffi_safe(|| {
+        let err = err.as_ref().ok_or(NullPointerError)?;
+        let value = err.provide_retry_after_seconds().map_err(|_| {
+            SignalProtocolError::InvalidArgument(format!(
+                "cannot get retry_after_seconds from error ({err})"
+            ))
+        })?;
+        write_result_to(out, value)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn signal_error_get_tries_remaining(
+    err: *const SignalFfiError,
+    out: *mut u32,
+) -> *mut SignalFfiError {
+    let err = AssertUnwindSafe(err);
+    run_ffi_safe(|| {
+        let err = err.as_ref().ok_or(NullPointerError)?;
+        let value = err.provide_tries_remaining().map_err(|_| {
+            SignalProtocolError::InvalidArgument(format!(
+                "cannot get tries_remaining from error ({err})"
+            ))
+        })?;
+        write_result_to(out, value)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn signal_error_get_unknown_fields(
+    err: *const SignalFfiError,
+    out: *mut StringArray,
+) -> *mut SignalFfiError {
+    let err = AssertUnwindSafe(err);
+    run_ffi_safe(|| {
+        let err = err.as_ref().ok_or(NullPointerError)?;
+        let value = err
+            .provide_unknown_fields()
+            .map_err(|_| {
+                SignalProtocolError::InvalidArgument(format!(
+                    "cannot get unknown_fields from error ({err})"
+                ))
+            })?
+            .into_boxed_slice();
+        write_result_to(out, value)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn signal_error_get_registration_error_not_deliverable(
+    err: *const SignalFfiError,
+    out_reason: *mut *const c_char,
+    out_permanent: *mut bool,
+) -> *mut SignalFfiError {
+    let err = AssertUnwindSafe(err);
+    run_ffi_safe(|| {
+        let err = err.as_ref().ok_or(NullPointerError)?;
+
+        let libsignal_net::registration::VerificationCodeNotDeliverable {
+            reason,
+            permanent_failure,
+        } = err
+            .provide_registration_code_not_deliverable()
+            .map_err(|_| {
+                SignalProtocolError::InvalidArgument(format!(
+                    "cannot get registration error from error ({err})"
+                ))
+            })?;
+        write_result_to(out_reason, reason.as_str())?;
+        write_result_to(out_permanent, *permanent_failure)?;
+        Ok(())
+    })
+}
+#[no_mangle]
+pub unsafe extern "C" fn signal_error_get_registration_lock(
+    err: *const SignalFfiError,
+    out_time_remaining_seconds: *mut u64,
+    out_svr2_username: *mut *const c_char,
+    out_svr2_password: *mut *const c_char,
+) -> *mut SignalFfiError {
+    let err = AssertUnwindSafe(err);
+    run_ffi_safe(|| {
+        let err = err.as_ref().ok_or(NullPointerError)?;
+
+        let libsignal_net::registration::RegistrationLock {
+            time_remaining,
+            svr2_credentials:
+                libsignal_net::auth::Auth {
+                    username: svr2_username,
+                    password: svr2_password,
+                },
+        } = err.provide_registration_lock().map_err(|_| {
+            SignalProtocolError::InvalidArgument(format!(
+                "cannot get registration error from error ({err})"
+            ))
+        })?;
+        write_result_to(out_time_remaining_seconds, time_remaining.as_secs())?;
+        write_result_to(out_svr2_username, svr2_username.as_str())?;
+        write_result_to(out_svr2_password, svr2_password.as_str())?;
+        Ok(())
+    })
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn signal_error_free(err: *mut SignalFfiError) {
     if !err.is_null() {
-        let _boxed_err = unsafe { Box::from_raw(err) };
+        let _boxed_err = Box::from_raw(err);
     }
 }
 
-#[bridge_fn(jni = false, node = false)]
-fn hex_encode(output: &mut [u8], input: &[u8]) -> Result<(), IllegalArgumentError> {
-    hex::encode_to_slice(input, output)
-        .map_err(|_| IllegalArgumentError::new("output buffer too small"))
+#[no_mangle]
+pub unsafe extern "C" fn signal_identitykeypair_deserialize(
+    private_key: *mut MutPointer<PrivateKey>,
+    public_key: *mut MutPointer<PublicKey>,
+    input: BorrowedSliceOf<c_uchar>,
+) -> *mut SignalFfiError {
+    run_ffi_safe(|| {
+        let input = input.as_slice()?;
+        let identity_key_pair = IdentityKeyPair::try_from(input)?;
+        write_result_to(public_key, *identity_key_pair.public_key())?;
+        write_result_to(private_key, *identity_key_pair.private_key())?;
+        Ok(())
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn signal_hex_encode(
+    output: *mut c_char,
+    output_len: usize,
+    input: *const u8,
+    input_len: usize,
+) -> *mut SignalFfiError {
+    run_ffi_safe(|| {
+        if input_len == 0 {
+            return Ok(());
+        }
+        if input_len > output_len / 2 {
+            // We check this early because an output buffer of {NULL, 0} is *valid*, just too small
+            // for anything but a zero-length input, while std::slice::from_raw_parts_mut requires a
+            // non-null base pointer.
+            return Err(SignalProtocolError::InvalidArgument(
+                "output buffer too small".to_string(),
+            )
+            .into());
+        }
+        if input.is_null() || output.is_null() {
+            return Err(NullPointerError.into());
+        }
+        let output = std::slice::from_raw_parts_mut(output, output_len);
+        let output = zerocopy::IntoBytes::as_mut_bytes(output);
+        let input = std::slice::from_raw_parts(input, input_len);
+        hex::encode_to_slice(input, output).expect("checked above");
+        Ok(())
+    })
 }

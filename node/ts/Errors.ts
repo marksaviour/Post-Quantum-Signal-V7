@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import { ProtocolAddress, ServiceId } from './Address.js';
-import * as Native from './Native.js';
+import { ProtocolAddress } from './Address';
+import * as Native from '../Native';
 
 export enum ErrorCode {
   Generic,
@@ -13,7 +13,6 @@ export enum ErrorCode {
   SealedSenderSelfSend,
   UntrustedIdentity,
   InvalidRegistrationId,
-  InvalidProtocolAddress,
   VerificationFailed,
   InvalidSession,
   InvalidSenderKeySession,
@@ -43,20 +42,16 @@ export enum ErrorCode {
   InvalidUsernameLinkEncryptedData,
 
   RateLimitedError,
-  RateLimitChallengeError,
 
   SvrDataMissing,
   SvrRequestFailed,
   SvrRestoreFailed,
-  SvrAttestationError,
-  SvrInvalidData,
 
   ChatServiceInactive,
   AppExpired,
   DeviceDelinked,
   ConnectionInvalidated,
   ConnectedElsewhere,
-  PossibleCaptiveNetwork,
 
   BackupValidation,
 
@@ -64,51 +59,6 @@ export enum ErrorCode {
 
   KeyTransparencyError,
   KeyTransparencyVerificationFailed,
-
-  IncrementalMacVerificationFailed,
-
-  RequestUnauthorized,
-  MismatchedDevices,
-}
-
-/** Called out as a separate type so it's not confused with a normal ServiceIdBinary. */
-type ServiceIdFixedWidthBinary = Uint8Array;
-
-/**
- * A failure sending to a recipient on account of not being up to date on their devices.
- *
- * An entry in {@link MismatchedDevicesError}. Each entry represents a recipient that has either
- * added, removed, or relinked some devices in their account (potentially including their primary
- * device), as represented by the {@link MismatchedDevicesEntry#missingDevices},
- * {@link MismatchedDevicesEntry#extraDevices}, and {@link MismatchedDevicesEntry#staleDevices}
- * arrays, respectively. Handling the exception involves removing the "extra" devices and
- * establishing new sessions for the "missing" and "stale" devices.
- */
-export class MismatchedDevicesEntry {
-  account: ServiceId;
-  missingDevices: number[];
-  extraDevices: number[];
-  staleDevices: number[];
-
-  constructor({
-    account,
-    missingDevices,
-    extraDevices,
-    staleDevices,
-  }: {
-    account: ServiceId | ServiceIdFixedWidthBinary;
-    missingDevices?: number[];
-    extraDevices?: number[];
-    staleDevices?: number[];
-  }) {
-    this.account =
-      account instanceof ServiceId
-        ? account
-        : ServiceId.parseFromServiceIdFixedWidthBinary(account);
-    this.missingDevices = missingDevices ?? [];
-    this.extraDevices = extraDevices ?? [];
-    this.staleDevices = staleDevices ?? [];
-  }
 }
 
 export class LibSignalErrorBase extends Error {
@@ -204,12 +154,6 @@ export type InvalidRegistrationIdError = LibSignalErrorCommon & {
   addr: ProtocolAddress;
 };
 
-export type InvalidProtocolAddress = LibSignalErrorCommon & {
-  code: ErrorCode.InvalidProtocolAddress;
-  name: string;
-  deviceId: number;
-};
-
 export type VerificationFailedError = LibSignalErrorCommon & {
   code: ErrorCode.VerificationFailed;
 };
@@ -301,12 +245,6 @@ export type RateLimitedError = LibSignalErrorBase & {
   readonly retryAfterSecs: number;
 };
 
-export type RateLimitChallengeError = LibSignalErrorBase & {
-  code: ErrorCode.RateLimitChallengeError;
-  readonly token: string;
-  readonly options: Set<'pushChallenge' | 'captcha'>;
-};
-
 export type ChatServiceInactive = LibSignalErrorBase & {
   code: ErrorCode.ChatServiceInactive;
 };
@@ -327,10 +265,6 @@ export type ConnectedElsewhereError = LibSignalErrorBase & {
   code: ErrorCode.ConnectedElsewhere;
 };
 
-export type PossibleCaptiveNetworkError = LibSignalErrorBase & {
-  code: ErrorCode.PossibleCaptiveNetwork;
-};
-
 export type SvrDataMissingError = LibSignalErrorBase & {
   code: ErrorCode.SvrDataMissing;
 };
@@ -342,14 +276,6 @@ export type SvrRequestFailedError = LibSignalErrorCommon & {
 export type SvrRestoreFailedError = LibSignalErrorCommon & {
   code: ErrorCode.SvrRestoreFailed;
   readonly triesRemaining: number;
-};
-
-export type SvrAttestationError = LibSignalErrorCommon & {
-  code: ErrorCode.SvrAttestationError;
-};
-
-export type SvrInvalidDataError = LibSignalErrorCommon & {
-  code: ErrorCode.SvrInvalidData;
 };
 
 export type BackupValidationError = LibSignalErrorCommon & {
@@ -369,26 +295,12 @@ export type KeyTransparencyVerificationFailed = LibSignalErrorCommon & {
   code: ErrorCode.KeyTransparencyVerificationFailed;
 };
 
-export type IncrementalMacVerificationFailed = LibSignalErrorCommon & {
-  code: ErrorCode.IncrementalMacVerificationFailed;
-};
-
-export type RequestUnauthorizedError = LibSignalErrorCommon & {
-  code: ErrorCode.RequestUnauthorized;
-};
-
-export type MismatchedDevicesError = LibSignalErrorCommon & {
-  code: ErrorCode.MismatchedDevices;
-  readonly entries: MismatchedDevicesEntry[];
-};
-
 export type LibSignalError =
   | GenericError
   | DuplicatedMessageError
   | SealedSenderSelfSendError
   | UntrustedIdentityError
   | InvalidRegistrationIdError
-  | InvalidProtocolAddress
   | VerificationFailedError
   | InvalidSessionError
   | InvalidSenderKeySessionError
@@ -414,21 +326,14 @@ export type LibSignalError =
   | SvrDataMissingError
   | SvrRestoreFailedError
   | SvrRequestFailedError
-  | SvrAttestationError
-  | SvrInvalidDataError
   | UnsupportedMediaInputError
   | ChatServiceInactive
   | AppExpiredError
   | DeviceDelinkedError
   | ConnectionInvalidatedError
   | ConnectedElsewhereError
-  | PossibleCaptiveNetworkError
   | RateLimitedError
-  | RateLimitChallengeError
   | BackupValidationError
   | CancellationError
   | KeyTransparencyError
-  | KeyTransparencyVerificationFailed
-  | IncrementalMacVerificationFailed
-  | RequestUnauthorizedError
-  | MismatchedDevicesError;
+  | KeyTransparencyVerificationFailed;

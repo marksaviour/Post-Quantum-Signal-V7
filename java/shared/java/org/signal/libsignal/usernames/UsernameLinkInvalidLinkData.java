@@ -5,10 +5,7 @@
 
 package org.signal.libsignal.usernames;
 
-import org.signal.libsignal.net.LookUpUsernameLinkFailure;
-
-public class UsernameLinkInvalidLinkData extends BaseUsernameException
-    implements LookUpUsernameLinkFailure {
+public class UsernameLinkInvalidLinkData extends BaseUsernameException {
   public UsernameLinkInvalidLinkData(final String message) {
     super(message);
   }

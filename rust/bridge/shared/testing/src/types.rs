@@ -6,6 +6,9 @@
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::Arc;
 
+#[allow(unused_imports)]
+use libsignal_protocol::SignalProtocolError;
+
 #[cfg(feature = "jni")]
 use crate::jni::HandleJniError;
 use crate::*;
@@ -134,7 +137,7 @@ impl ffi::SimpleArgTypeInfo for ErrorOnBorrow {
     type ArgType = *const std::ffi::c_void;
 
     fn convert_from(_foreign: Self::ArgType) -> ffi::SignalFfiResult<Self> {
-        Err(IllegalArgumentError::new("deliberate error").into())
+        Err(SignalProtocolError::InvalidArgument("deliberate error".to_string()).into())
     }
 }
 
@@ -286,7 +289,7 @@ impl ffi::ResultTypeInfo for ErrorOnReturn {
     type ResultType = *const std::ffi::c_void;
 
     fn convert_into(self) -> ffi::SignalFfiResult<Self::ResultType> {
-        Err(IllegalArgumentError::new("deliberate error").into())
+        Err(SignalProtocolError::InvalidArgument("deliberate error".to_string()).into())
     }
 }
 
@@ -349,21 +352,6 @@ impl<'a> node::ResultTypeInfo<'a> for PanicOnReturn {
     }
 }
 
-#[derive(derive_more::Deref)]
-pub struct TestingSemaphore(tokio::sync::Semaphore);
-bridge_as_handle!(TestingSemaphore);
-bridge_handle_fns!(TestingSemaphore, clone = false);
-
-#[bridge_fn]
-fn TestingSemaphore_New(initial: u32) -> TestingSemaphore {
-    TestingSemaphore(tokio::sync::Semaphore::new(initial.try_into().unwrap()))
-}
-
-#[bridge_fn]
-fn TestingSemaphore_AddPermits(semaphore: &TestingSemaphore, permits: u32) {
-    semaphore.add_permits(permits.try_into().unwrap());
-}
-
 /// Counter for future cancellations
 pub struct TestingFutureCancellationCounter(pub(crate) Arc<tokio::sync::Semaphore>);
 
@@ -398,17 +386,18 @@ impl ffi::SimpleArgTypeInfo for TestingFutureCancellationGuard {
 
 #[cfg(feature = "jni")]
 impl<'a> jni::SimpleArgTypeInfo<'a> for TestingFutureCancellationGuard {
-    type ArgType = jni::ObjectHandle;
+    type ArgType = <&'a TestingFutureCancellationCounter as jni::SimpleArgTypeInfo<'a>>::ArgType;
 
     fn convert_from(
         env: &mut jni::JNIEnv<'a>,
         foreign: &Self::ArgType,
     ) -> Result<Self, jni::BridgeLayerError> {
-        <&TestingFutureCancellationCounter as jni::ArgTypeInfo>::borrow(env, foreign).map(
-            |container| TestingFutureCancellationGuard {
-                increment_on_drop: Arc::clone(&container.0),
-            },
-        )
+        <&TestingFutureCancellationCounter as jni::SimpleArgTypeInfo>::convert_from(env, foreign)
+            .map(
+                |TestingFutureCancellationCounter(counter)| TestingFutureCancellationGuard {
+                    increment_on_drop: Arc::clone(counter),
+                },
+            )
     }
 }
 
@@ -433,30 +422,3 @@ impl<'storage> node::AsyncArgTypeInfo<'storage> for TestingFutureCancellationGua
 }
 
 bridge_as_handle!(TestingFutureCancellationCounter);
-
-pub struct TestingValueHolder(pub std::sync::atomic::AtomicI32);
-
-impl Drop for TestingValueHolder {
-    fn drop(&mut self) {
-        self.0
-            .store(0x1111_dead, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
-bridge_as_handle!(TestingValueHolder);
-bridge_handle_fns!(TestingValueHolder, clone = false);
-
-#[bridge_fn]
-fn TestingValueHolder_New(value: i32) -> TestingValueHolder {
-    TestingValueHolder(value.into())
-}
-
-#[bridge_fn]
-fn TestingValueHolder_Get(holder: &TestingValueHolder) -> i32 {
-    holder.0.load(std::sync::atomic::Ordering::SeqCst)
-}
-
-#[bridge_fn]
-fn TESTING_ReturnPair() -> (i32, String) {
-    (1, "libsignal".into())
-}

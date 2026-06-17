@@ -16,7 +16,6 @@ use poksho::ShoApi;
 use serde::{Deserialize, Serialize};
 
 use super::{CallLinkPublicParams, CallLinkSecretParams};
-use crate::ZkGroupVerificationFailure;
 use crate::common::serialization::ReservedByte;
 use crate::common::sho::Sho;
 use crate::common::simple_types::*;
@@ -24,6 +23,7 @@ use crate::crypto::uid_encryption;
 use crate::crypto::uid_struct::UidStruct;
 use crate::generic_server_params::{GenericServerPublicParams, GenericServerSecretParams};
 use crate::groups::UuidCiphertext;
+use crate::ZkGroupVerificationFailure;
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
 struct CallLinkRoomIdPoint(RistrettoPoint);
@@ -42,7 +42,7 @@ impl zkcredential::attributes::RevealedAttribute for CallLinkRoomIdPoint {
 
 const CREDENTIAL_LABEL: &[u8] = b"20230413_Signal_CreateCallLinkCredential";
 
-#[derive(Clone, Serialize, Deserialize, PartialDefault)]
+#[derive(Serialize, Deserialize, PartialDefault)]
 pub struct CreateCallLinkCredentialRequestContext {
     reserved: ReservedByte,
     blinded_room_id: zkcredential::issuance::blind::BlindedPoint,
@@ -76,7 +76,7 @@ impl CreateCallLinkCredentialRequestContext {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialDefault)]
+#[derive(Serialize, Deserialize, PartialDefault)]
 pub struct CreateCallLinkCredentialRequest {
     reserved: ReservedByte,
     blinded_room_id: zkcredential::issuance::blind::BlindedPoint,
@@ -112,7 +112,7 @@ impl CreateCallLinkCredentialRequest {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialDefault)]
+#[derive(Serialize, Deserialize, PartialDefault)]
 pub struct CreateCallLinkCredentialResponse {
     reserved: ReservedByte,
     // Does not include the room ID or the user ID, because the client already knows those.
@@ -148,7 +148,7 @@ impl CreateCallLinkCredentialRequestContext {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialDefault)]
+#[derive(Serialize, Deserialize, PartialDefault)]
 pub struct CreateCallLinkCredential {
     reserved: ReservedByte,
     // We could avoid having to pass in the room ID or user ID again if we saved them here, but
@@ -181,7 +181,7 @@ impl CreateCallLinkCredential {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialDefault)]
+#[derive(Serialize, Deserialize, PartialDefault)]
 pub struct CreateCallLinkCredentialPresentation {
     reserved: ReservedByte,
     // The room ID is provided externally as part of the request.

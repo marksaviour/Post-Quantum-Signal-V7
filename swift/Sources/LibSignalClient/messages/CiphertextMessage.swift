@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import Foundation
 import SignalFfi
 
 public class CiphertextMessage: NativeHandleOwner<SignalMutPointerCiphertextMessage> {
@@ -34,27 +33,22 @@ public class CiphertextMessage: NativeHandleOwner<SignalMutPointerCiphertextMess
         }
     }
 
-    override internal class func destroyNativeHandle(
-        _ handle: NonNull<SignalMutPointerCiphertextMessage>
-    ) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerCiphertextMessage>) -> SignalFfiErrorRef? {
         return signal_ciphertext_message_destroy(handle.pointer)
     }
 
     public convenience init(_ plaintextContent: PlaintextContent) {
-        let result = plaintextContent.withNativeHandle { plaintextContentHandle in
-            failOnError {
-                try invokeFnReturningValueByPointer(.init()) {
-                    signal_ciphertext_message_from_plaintext_content($0, plaintextContentHandle.const())
-                }
-            }
+        var result = SignalMutPointerCiphertextMessage()
+        plaintextContent.withNativeHandle { plaintextContentHandle in
+            failOnError(signal_ciphertext_message_from_plaintext_content(&result, plaintextContentHandle.const()))
         }
         self.init(owned: NonNull(result)!)
     }
 
-    public func serialize() -> Data {
+    public func serialize() -> [UInt8] {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningData {
+                try invokeFnReturningArray {
                     signal_ciphertext_message_serialize($0, nativeHandle.const())
                 }
             }

@@ -53,21 +53,7 @@
           }
         }
       },
-      "optimize_on_device_storage": false,
-      "backup_level": 201,
-      "default_sent_media_quality": "Standard",
-      "auto_download_settings": {
-        "images": "Never",
-        "audio": "Never",
-        "video": "Wifi",
-        "documents": "WifiAndCellular"
-      },
-      "screen_lock_timeout": 2520000,
-      "pin_reminders": null,
-      "app_theme": "System",
-      "calls_use_less_data_setting": "MobileDataOnly",
-      "allow_sealed_sender_from_anyone": false,
-      "allow_automatic_key_verification": false
+      "optimize_on_device_storage": true
     },
     "avatar_url_path": "",
     "donation_subscription": null,
@@ -77,18 +63,7 @@
         "IosAppStoreOriginalTransactionId": 5
       }
     },
-    "svr_pin": "",
-    "android_specific_settings": {
-      "use_system_emoji": true,
-      "screenshot_security": false,
-      "navigation_bar_size": "Compact"
-    },
-    "ios_specific_settings": {
-      "is_system_call_log_enabled": true
-    },
-    "bio_text": "",
-    "bio_emoji": "",
-    "key_transparency_data": null
+    "svr_pin": ""
   },
   "recipients": [],
   "chats": [],

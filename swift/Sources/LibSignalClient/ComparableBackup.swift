@@ -32,11 +32,12 @@ public class ComparableBackup: NativeHandleOwner<SignalMutPointerComparableBacku
     ///  - ``SignalError/ioError(_:)``: If an IO error on the input occurs.
     ///  - ``MessageBackupValidationError``: If validation of the input fails.
     public convenience init(purpose: MessageBackupPurpose, length: UInt64, stream: SignalInputStream) throws {
-        let handle = try withInputStream(stream) { stream in
-            try invokeFnReturningValueByPointer(.init()) {
-                signal_comparable_backup_read_unencrypted($0, stream, length, purpose.rawValue)
+        var handle = SignalMutPointerComparableBackup()
+        try checkError(
+            try withInputStream(stream) { stream in
+                signal_comparable_backup_read_unencrypted(&handle, stream, length, purpose.rawValue)
             }
-        }
+        )
         self.init(owned: NonNull(handle)!)
     }
 
@@ -72,9 +73,7 @@ public class ComparableBackup: NativeHandleOwner<SignalMutPointerComparableBacku
         }
     }
 
-    override internal class func destroyNativeHandle(
-        _ handle: NonNull<SignalMutPointerComparableBackup>
-    ) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerComparableBackup>) -> SignalFfiErrorRef? {
         signal_comparable_backup_destroy(handle.pointer)
     }
 }

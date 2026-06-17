@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, Criterion};
 use libsignal_core::curve::KeyPair;
-use rand::{Rng, rng};
+use rand::{rng, Rng};
 
 pub fn generation(c: &mut Criterion) {
     let rng = &mut rng();

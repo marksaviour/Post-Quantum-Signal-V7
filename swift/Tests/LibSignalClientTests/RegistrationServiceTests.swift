@@ -4,22 +4,21 @@
 //
 
 import Foundation
-import SignalFfi
-import Testing
-
 @testable import LibSignalClient
+import SignalFfi
+import XCTest
 
 // These tests depend on test-only functions that aren't available on device builds to save on code size.
 #if !os(iOS) || targetEnvironment(simulator)
 
-class RegistrationServiceConversionTests {
+class RegistrationServiceConversionTests: XCTestCase {
     private struct ErrorTest {
         public let operationName: String
-        public let convertFn: (UnsafePointer<CChar>) -> OpaquePointer?
+        public let convertFn: (_: UnsafePointer<CChar>) -> OpaquePointer?
         public let cases: [(String, (Error) -> Bool)]
         public init(
             _ operationName: String,
-            _ convertFn: @escaping (UnsafePointer<CChar>) -> OpaquePointer?,
+            _ convertFn: @escaping (_: UnsafePointer<CChar>) -> OpaquePointer?,
             _ cases: [(String, (Error) -> Bool)]
         ) {
             self.operationName = operationName
@@ -28,51 +27,41 @@ class RegistrationServiceConversionTests {
         }
     }
 
-    @Test
-    func registrationSessionStateConversion() throws {
+    func testRegistrationSessionStateConversion() throws {
         let sessionState: RegistrationSessionState = try invokeFnReturningNativeHandle {
             signal_testing_registration_session_info_convert($0)
         }
-        #expect(sessionState.allowedToRequestCode == true)
-        #expect(sessionState.verified == true)
-        #expect(sessionState.nextCall == TimeInterval(123))
-        #expect(sessionState.nextSms == TimeInterval(456))
-        #expect(sessionState.nextVerificationAttempt == TimeInterval(789))
-        #expect(sessionState.requestedInformation == [.pushChallenge])
+        XCTAssertEqual(sessionState.allowedToRequestCode, true)
+        XCTAssertEqual(sessionState.verified, true)
+        XCTAssertEqual(sessionState.nextCall, TimeInterval(123))
+        XCTAssertEqual(sessionState.nextSms, TimeInterval(456))
+        XCTAssertEqual(sessionState.nextVerificationAttempt, TimeInterval(789))
+        XCTAssertEqual(sessionState.requestedInformation, [.pushChallenge])
     }
 
-    @Test
-    func registerAccountResponseConversion() throws {
+    func testRegisterAccountResponseConversion() throws {
         let response: RegisterAccountResponse = try invokeFnReturningNativeHandle {
             signal_testing_register_account_response_create_test_value($0)
         }
-        #expect(response.number == "+18005550123")
-        #expect(try Aci.parseFrom(serviceIdString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa") == response.aci)
-        #expect(try Pni.parseFrom(serviceIdString: "PNI:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb") == response.pni)
-        #expect(response.usernameHash == Data("username-hash".utf8))
-        #expect(response.usernameLinkHandle == UUID(uuidString: "55555555-5555-5555-5555-555555555555"))
-        #expect(response.storageCapable == true)
-        #expect(
-            response.entitlements.0 == [
-                BadgeEntitlement(id: "first", visible: true, expiration: 123_456),
-                BadgeEntitlement(id: "second", visible: false, expiration: 555),
-            ]
-        )
-        #expect(response.entitlements.1 == BackupEntitlement(expiration: 888_888, level: 123))
-        #expect(response.reregistration == true)
+        XCTAssertEqual(response.number, "+18005550123")
+        XCTAssertEqual(response.aci, try Aci.parseFrom(serviceIdString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))
+        XCTAssertEqual(response.pni, try Pni.parseFrom(serviceIdString: "PNI:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
+        XCTAssertEqual(response.usernameHash, Array("username-hash".utf8))
+        XCTAssertEqual(response.usernameLinkHandle, UUID(uuidString: "55555555-5555-5555-5555-555555555555"))
+        XCTAssertEqual(response.storageCapable, true)
+        XCTAssertEqual(response.entitlements.0, [
+            BadgeEntitlement(id: "first", visible: true, expiration: 123_456),
+            BadgeEntitlement(id: "second", visible: false, expiration: 555),
+        ])
+        XCTAssertEqual(response.entitlements.1, BackupEntitlement(expiration: 888_888, level: 123))
+        XCTAssertEqual(response.reregistration, true)
     }
 
-    // swift-format-ignore
-    // The long lines are one-per-test-case; it's clearer to see the form like this.
-    // They'd get shorter if Swift added a `matches!` equivalent.
-    @Test
-    func errorConversion() {
-        let retryLaterCase = ("RetryAfter42Seconds", { (e: Error) in if case SignalError.rateLimitedError(retryAfter: 42, message: "Rate limited; try again after 42s") = e { true } else { false }})
-        let unknownCase = ("Unknown", { (e: Error) in if case RegistrationError.unknown("some message") = e { true } else { false }})
+    func testErrorConversion() {
+        let retryLaterCase = ("RetryAfter42Seconds", { (e: Error) in if case SignalError.rateLimitedError(retryAfter: 42, message: "retry after 42s") = e { true } else { false }})
+        let unknownCase = ("Unknown", { (e: Error) in if case RegistrationError.unknown("unknown error: some message") = e { true } else { false }})
         let timeoutCase = ("Timeout", { (e: Error) in if case SignalError.requestTimeoutError("the request timed out") = e { true } else { false }})
-        let requestNotValidCase = ("RequestWasNotValid", { (e: Error) in if case RegistrationError.unknown("the request did not pass server validation") = e { true } else { false }})
-        let serverErrorCase = ("ServerSideError", { (e: Error) in if case RegistrationError.unknown("server-side error, retryable with backoff") = e { true } else { false }})
-        let pushChallengeCase = ("PushChallenge", { (e: Error) in if case SignalError.rateLimitChallengeError(token: "token", options: [.pushChallenge], message: "retry after completing a rate limit challenge [PushChallenge]") = e { true } else { false }})
+        let requestNotValidCase = ("RequestWasNotValid", { (e: Error) in if case RegistrationError.requestNotValid("the request did not pass server validation") = e { true } else { false }})
 
         let cases = [
             ErrorTest("CreateSession", signal_testing_registration_service_create_session_error_convert, [
@@ -81,8 +70,6 @@ class RegistrationServiceConversionTests {
                 unknownCase,
                 timeoutCase,
                 requestNotValidCase,
-                serverErrorCase,
-                pushChallengeCase,
             ]),
             ErrorTest("ResumeSession", signal_testing_registration_service_resume_session_error_convert, [
                 ("InvalidSessionId", { if case RegistrationError.invalidSessionId("invalid session ID value") = $0 { true } else { false }}),
@@ -90,8 +77,6 @@ class RegistrationServiceConversionTests {
                 unknownCase,
                 timeoutCase,
                 requestNotValidCase,
-                serverErrorCase,
-                pushChallengeCase,
             ]),
             ErrorTest(
                 "UpdateSession",
@@ -102,7 +87,6 @@ class RegistrationServiceConversionTests {
                     unknownCase,
                     timeoutCase,
                     requestNotValidCase,
-                    serverErrorCase,
                 ]
             ),
             ErrorTest(
@@ -118,7 +102,6 @@ class RegistrationServiceConversionTests {
                     unknownCase,
                     timeoutCase,
                     requestNotValidCase,
-                    serverErrorCase,
                 ]
             ),
             ErrorTest(
@@ -132,7 +115,6 @@ class RegistrationServiceConversionTests {
                     unknownCase,
                     timeoutCase,
                     requestNotValidCase,
-                    serverErrorCase,
                 ]
             ),
             ErrorTest(
@@ -143,7 +125,6 @@ class RegistrationServiceConversionTests {
                     unknownCase,
                     timeoutCase,
                     requestNotValidCase,
-                    serverErrorCase,
                 ]
             ),
             ErrorTest(
@@ -156,7 +137,6 @@ class RegistrationServiceConversionTests {
                     retryLaterCase,
                     unknownCase,
                     timeoutCase,
-                    serverErrorCase,
                 ]
             ),
         ]
@@ -167,61 +147,54 @@ class RegistrationServiceConversionTests {
                     try desc.withCString { errorCase in
                         try checkError(item.convertFn(errorCase))
                     }
-                    Issue.record("exception expected")
+                    XCTFail("exception expected")
                 } catch let e {
-                    #expect(checkErrorExpected(e))
+                    XCTAssert(checkErrorExpected(e), String(describing: e))
                 }
             }
         }
     }
 
-    @Test
-    func checkSvr2CredentialsConvert() throws {
+    func testCheckSvr2CredentialsConvert() {
         let expectedEntries = [
             "username:pass-match": Svr2CredentialsResult.match,
             "username:pass-no-match": Svr2CredentialsResult.noMatch,
             "username:pass-invalid": Svr2CredentialsResult.invalid,
         ]
 
-        #expect(
-            try invokeFnReturningCheckSvr2CredentialsResponse(
-                fn: signal_testing_registration_service_check_svr2_credentials_response_convert
-            ) == expectedEntries
+        XCTAssertEqual(
+            try invokeFnReturningCheckSvr2CredentialsResponse(fn: signal_testing_registration_service_check_svr2_credentials_response_convert),
+            expectedEntries
         )
     }
 
-    @Test
-    func convertSignedPreKey() throws {
+    func testConvertSignedPreKey() throws {
         let key = PrivateKey.generate().publicKey
         let signedPublicPreKey = SignedPublicPreKey(keyId: 42, publicKey: key, signature: Data("signature".utf8))
 
         try key.withNativeHandle { key in
             try signedPublicPreKey.withNativeStruct { signedPublicPreKey in
-                try checkError(
-                    signal_testing_signed_public_pre_key_check_bridges_correctly(key.const(), signedPublicPreKey)
-                )
+                try checkError(signal_testing_signed_public_pre_key_check_bridges_correctly(key.const(), signedPublicPreKey))
             }
         }
     }
 }
 
-class RegistrationServiceFakeChatTests {
-    @Test
-    func fakeRemoteCreateSession() async throws {
+class RegistrationServiceFakeChatTests: XCTestCase {
+    public func testFakeRemoteCreateSession() async throws {
         let tokio = TokioAsyncContext()
         let server = FakeChatServer(asyncContext: tokio)
         async let startCreateSessionRequest =
             RegistrationService.fakeCreateSession(
                 fakeChatServer: server,
-                e164: "+18005550123",
-                pushToken: "myPushToken"
+                e164: "+18005550123", pushToken: "myPushToken"
             )
 
         let fakeRemote = try await server.getNextRemote()
         let (firstRequest, firstRequestId) = try await fakeRemote.getNextIncomingRequest()
 
-        #expect(firstRequest.method == "POST")
-        #expect(firstRequest.pathAndQuery == "/v1/verification/session")
+        XCTAssertEqual(firstRequest.method, "POST")
+        XCTAssertEqual(firstRequest.pathAndQuery, "/v1/verification/session")
 
         try fakeRemote.sendResponse(
             requestId: firstRequestId,
@@ -229,26 +202,25 @@ class RegistrationServiceFakeChatTests {
                 status: 200,
                 message: "OK",
                 headers: ["content-type": "application/json"],
-                body: Data(
-                    """
+                body: Data("""
                     {
                         "allowedToRequestCode": true,
                         "verified": false,
                         "requestedInformation": ["pushChallenge", "captcha"],
                         "id": "fake-session-A"
                     }
-                    """.utf8
-                )
+                    """.utf8)
             )
         )
 
         let session = try await startCreateSessionRequest
-        #expect(session.sessionId == "fake-session-A")
+        XCTAssertEqual(session.sessionId, "fake-session-A")
 
         let sessionState = session.sessionState
-        #expect(sessionState.verified == false)
-        #expect(
-            sessionState.requestedInformation == [
+        XCTAssertEqual(sessionState.verified, false)
+        XCTAssertEqual(
+            sessionState.requestedInformation,
+            [
                 .pushChallenge,
                 .captcha,
             ]
@@ -262,18 +234,17 @@ class RegistrationServiceFakeChatTests {
 
         let (secondRequest, secondRequestId) = try await fakeRemote.getNextIncomingRequest()
 
-        #expect(secondRequest.method == "POST")
-        #expect(secondRequest.pathAndQuery == "/v1/verification/session/fake-session-A/code")
-        #expect(
-            secondRequest.body
-                == Data(
-                    """
-                    {"transport":"voice","client":"libsignal test"}
-                    """.utf8
-                )
+        XCTAssertEqual(secondRequest.method, "POST")
+        XCTAssertEqual(secondRequest.pathAndQuery, "/v1/verification/session/fake-session-A/code")
+        XCTAssertEqual(
+            secondRequest.body,
+            Data("""
+                {"transport":"voice","client":"libsignal test"}
+                """.utf8)
         )
-        #expect(
-            secondRequest.headers == ["content-type": "application/json", "accept-language": "fr-CA"]
+        XCTAssertEqual(
+            secondRequest.headers,
+            ["content-type": "application/json", "accept-language": "fr-CA"]
         )
 
         try fakeRemote.sendResponse(
@@ -282,8 +253,7 @@ class RegistrationServiceFakeChatTests {
                 status: 200,
                 message: "OK",
                 headers: ["content-type": "application/json"],
-                body: Data(
-                    """
+                body: Data("""
                     {
                         "allowedToRequestCode": true,
                         "verified": false,
@@ -291,24 +261,21 @@ class RegistrationServiceFakeChatTests {
                         "id": "fake-session-A"
                     }
                     """
-                    .utf8
-                )
+                    .utf8)
             )
         )
 
         let () = try await requestVerification
-        #expect(session.sessionState.requestedInformation == [.captcha])
+        XCTAssertEqual(session.sessionState.requestedInformation, [.captcha])
     }
 
-    @Test
-    func fakeRemoteRegisterAccount() async throws {
+    func testFakeRemoteRegisterAccount() async throws {
         let tokio = TokioAsyncContext()
         let server = FakeChatServer(asyncContext: tokio)
         async let startCreateSessionRequest =
             RegistrationService.fakeCreateSession(
                 fakeChatServer: server,
-                e164: "+18005550123",
-                pushToken: "myPushToken"
+                e164: "+18005550123", pushToken: "myPushToken"
             )
 
         let fakeRemote = try await server.getNextRemote()
@@ -332,13 +299,12 @@ class RegistrationServiceFakeChatTests {
                         "id": "fake-session-A"
                     }
                     """
-                    .utf8
-                )
+                    .utf8)
             )
         )
 
         let session = try await startCreateSessionRequest
-        #expect(session.sessionId == "fake-session-A")
+        XCTAssertEqual("fake-session-A", session.sessionId)
 
         let unidentifiedAccessKey = Data(repeating: 0x55, count: 16)
         let aciKeys = RegisterAccountKeys.createForTest()
@@ -354,7 +320,7 @@ class RegistrationServiceFakeChatTests {
                     registrationLock: "registration lock",
                     unidentifiedAccessKey: unidentifiedAccessKey,
                     unrestrictedUnidentifiedAccess:
-                        true,
+                    true,
                     capabilities: ["capable"],
                     discoverableByPhoneNumber: true
                 ),
@@ -369,14 +335,15 @@ class RegistrationServiceFakeChatTests {
 
         let (secondRequest, secondRequestId) = try await fakeRemote.getNextIncomingRequest()
 
-        #expect(secondRequest.method == "POST")
-        #expect(secondRequest.pathAndQuery == "/v1/registration")
+        XCTAssertEqual("POST", secondRequest.method)
+        XCTAssertEqual("/v1/registration", secondRequest.pathAndQuery)
 
-        #expect(
+        XCTAssertEqual(
             [
                 "content-type": "application/json",
                 "authorization": "Basic " + Data("+18005550123:account password".utf8).base64EncodedString(),
-            ] == secondRequest.headers
+            ],
+            secondRequest.headers
         )
 
         let secondRequestBodyJson = try JSONSerialization.jsonObject(with: secondRequest.body)
@@ -384,30 +351,30 @@ class RegistrationServiceFakeChatTests {
             fatalError("body was \(secondRequestBodyJson)")
         }
 
-        #expect(secondRequestJson["sessionId"] as? String == "fake-session-A")
-        #expect(secondRequestJson["skipDeviceTransfer"] as? Bool == true)
+        XCTAssertEqual("fake-session-A", secondRequestJson["sessionId"] as? String)
+        XCTAssertEqual(true, secondRequestJson["skipDeviceTransfer"] as? Bool)
         do {
             guard let accountAttributes = secondRequestJson["accountAttributes"] as? [String: Any] else {
                 fatalError("accountAttributes was \(String(describing: secondRequestJson["accountAttributes"]))")
             }
-            #expect(
-                accountAttributes["recoveryPassword"] as? String == "cmVjb3ZlcnkgcGFzc3dvcmQ="
+            XCTAssertEqual(
+                accountAttributes["recoveryPassword"] as? String, "cmVjb3ZlcnkgcGFzc3dvcmQ="
             )
-            #expect(accountAttributes["registrationId"] as? Double == 1)
-            #expect(accountAttributes["pniRegistrationId"] as? Double == 2)
-            #expect(accountAttributes["registrationLock"] as? String == "registration lock")
-            #expect(accountAttributes["unidentifiedAccessKey"] as? Array == Array(repeating: 0x55, count: 16))
-            #expect(accountAttributes["unrestrictedUnidentifiedAccess"] as? Bool == true)
-            #expect(accountAttributes["capabilities"] as? [String: Bool] == ["capable": true])
-            #expect(accountAttributes["discoverableByPhoneNumber"] as? Bool == true)
-            #expect(accountAttributes["fetchesMessages"] as? Bool == false)
+            XCTAssertEqual(accountAttributes["registrationId"] as? Double, 1)
+            XCTAssertEqual(accountAttributes["pniRegistrationId"] as? Double, 2)
+            XCTAssertEqual(accountAttributes["registrationLock"] as? String, "registration lock")
+            XCTAssertEqual(accountAttributes["unidentifiedAccessKey"] as? Array, Array(repeating: 0x55, count: 16))
+            XCTAssertEqual(accountAttributes["unrestrictedUnidentifiedAccess"] as? Bool, true)
+            XCTAssertEqual(accountAttributes["capabilities"] as? [String: Bool], ["capable": true])
+            XCTAssertEqual(accountAttributes["discoverableByPhoneNumber"] as? Bool, true)
+            XCTAssertEqual(accountAttributes["fetchesMessages"] as? Bool, false)
         }
 
-        #expect(
-            Data(aciKeys.publicKey.serialize()).base64EncodedString() == secondRequestJson["aciIdentityKey"] as? String
+        XCTAssertEqual(
+            Data(aciKeys.publicKey.serialize()).base64EncodedString(), secondRequestJson["aciIdentityKey"] as? String
         )
-        #expect(
-            Data(pniKeys.publicKey.serialize()).base64EncodedString() == secondRequestJson["pniIdentityKey"] as? String
+        XCTAssertEqual(
+            Data(pniKeys.publicKey.serialize()).base64EncodedString(), secondRequestJson["pniIdentityKey"] as? String
         )
 
         // We don't need to check all the keys, just one of each kind is enough.
@@ -415,22 +382,16 @@ class RegistrationServiceFakeChatTests {
             guard let aciSignedPreKey = secondRequestJson["aciSignedPreKey"] as? [String: Any] else {
                 fatalError("aciSignedPreKey was \(String(describing: secondRequestJson["aciSignedPreKey"]))")
             }
-            #expect(aciSignedPreKey["signature"] as? String == Data("EC signature".utf8).base64EncodedString())
-            #expect(aciSignedPreKey["keyId"] as? Double == 1)
-            #expect(
-                aciSignedPreKey["publicKey"] as? String
-                    == Data(aciKeys.signedPreKey.publicKey.serialize()).base64EncodedString()
-            )
+            XCTAssertEqual(aciSignedPreKey["signature"] as? String, Data("EC signature".utf8).base64EncodedString())
+            XCTAssertEqual(aciSignedPreKey["keyId"] as? Double, 1)
+            XCTAssertEqual(aciSignedPreKey["publicKey"] as? String, Data(aciKeys.signedPreKey.publicKey.serialize()).base64EncodedString())
 
             guard let aciPqLastResortPreKey = secondRequestJson["aciPqLastResortPreKey"] as? [String: Any] else {
                 fatalError("aciSignedPreKey was \(String(describing: secondRequestJson["aciPqLastResortPreKey"]))")
             }
-            #expect(aciPqLastResortPreKey["signature"] as? String == Data("KEM signature".utf8).base64EncodedString())
-            #expect(aciPqLastResortPreKey["keyId"] as? Double == 2)
-            #expect(
-                aciPqLastResortPreKey["publicKey"] as? String
-                    == Data(aciKeys.pqLastResortPreKey.publicKey.serialize()).base64EncodedString()
-            )
+            XCTAssertEqual(aciPqLastResortPreKey["signature"] as? String, Data("KEM signature".utf8).base64EncodedString())
+            XCTAssertEqual(aciPqLastResortPreKey["keyId"] as? Double, 2)
+            XCTAssertEqual(aciPqLastResortPreKey["publicKey"] as? String, Data(aciKeys.pqLastResortPreKey.publicKey.serialize()).base64EncodedString())
         }
 
         try fakeRemote.sendResponse(
@@ -439,8 +400,7 @@ class RegistrationServiceFakeChatTests {
                 status: 200,
                 message: "OK",
                 headers: ["content-type": "application/json"],
-                body: Data(
-                    """
+                body: Data("""
                     {
                         "uuid": "aabbaabb-5555-6666-8888-111111111111",
                         "pni": "ddeeddee-5555-6666-8888-111111111111",
@@ -463,17 +423,16 @@ class RegistrationServiceFakeChatTests {
                         }
                     }
                     """
-                    .utf8
-                )
+                    .utf8)
             )
         )
 
         let response = try await registerAccount
         // We only perform a cursory check here because there is a already a dedicated test for bridging
         // the response.
-        #expect(response.aci.serviceIdString == "aabbaabb-5555-6666-8888-111111111111")
-        #expect(response.pni.serviceIdString == "PNI:ddeeddee-5555-6666-8888-111111111111")
-        #expect(response.number == "+18005550123")
+        XCTAssertEqual("aabbaabb-5555-6666-8888-111111111111", response.aci.serviceIdString)
+        XCTAssertEqual("PNI:ddeeddee-5555-6666-8888-111111111111", response.pni.serviceIdString)
+        XCTAssertEqual("+18005550123", response.number)
     }
 
     private struct RegisterAccountKeys: Sendable {
@@ -485,16 +444,13 @@ class RegistrationServiceFakeChatTests {
             return RegisterAccountKeys(
                 publicKey: PrivateKey.generate().publicKey,
                 signedPreKey: SignedPublicPreKey(
-                    keyId: 1,
-                    publicKey: PrivateKey.generate().publicKey,
-                    signature: Data("EC signature".utf8)
+                    keyId: 1, publicKey: PrivateKey.generate().publicKey, signature: Data("EC signature".utf8)
                 ),
                 pqLastResortPreKey: SignedPublicPreKey(
                     keyId: 2,
                     publicKey: KEMKeyPair.generate().publicKey,
                     signature: Data(
-                        "KEM signature".utf8
-                    )
+                        "KEM signature".utf8)
                 )
             )
         }
@@ -509,24 +465,13 @@ extension RegistrationService {
         mcc: String? = nil,
         mnc: String? = nil
     ) async throws -> RegistrationService {
-        let registrationService: SignalMutPointerRegistrationService = try await fakeChatServer.asyncContext
-            .invokeAsyncFunction { promise, asyncContext in
-                SignalFfiRegistrationCreateSessionRequest.withNativeStruct(
-                    e164: e164,
-                    pushToken: pushToken,
-                    mcc: mcc,
-                    mnc: mnc
-                ) { request in
-                    fakeChatServer.withNativeHandle { fakeChatServer in
-                        signal_testing_fake_registration_session_create_session(
-                            promise,
-                            asyncContext.const(),
-                            request,
-                            fakeChatServer.const()
-                        )
-                    }
+        let registrationService: SignalMutPointerRegistrationService = try await fakeChatServer.asyncContext.invokeAsyncFunction { promise, asyncContext in
+            SignalFfiRegistrationCreateSessionRequest.withNativeStruct(e164: e164, pushToken: pushToken, mcc: mcc, mnc: mnc) { request in
+                fakeChatServer.withNativeHandle { fakeChatServer in
+                    signal_testing_fake_registration_session_create_session(promise, asyncContext.const(), request, fakeChatServer.const())
                 }
             }
+        }
         return RegistrationService(owned: NonNull(registrationService)!, asyncContext: fakeChatServer.asyncContext)
     }
 }

@@ -5,12 +5,12 @@
 
 package org.signal.libsignal.net;
 
-import kotlin.Pair;
 import org.signal.libsignal.internal.CompletableFuture;
 import org.signal.libsignal.internal.NativeHandleGuard;
 import org.signal.libsignal.internal.NativeTesting;
 import org.signal.libsignal.internal.TokioAsyncContext;
 import org.signal.libsignal.net.ChatConnection.InternalRequest;
+import org.signal.libsignal.protocol.util.Pair;
 
 class FakeChatRemote extends NativeHandleGuard.SimpleOwner {
   private TokioAsyncContext tokioContext;
@@ -20,7 +20,6 @@ class FakeChatRemote extends NativeHandleGuard.SimpleOwner {
     this.tokioContext = tokioContext;
   }
 
-  @SuppressWarnings("unchecked")
   public CompletableFuture<Pair<InternalRequest, Long>> getNextIncomingRequest() {
     return tokioContext
         .guardedMap(
@@ -30,9 +29,16 @@ class FakeChatRemote extends NativeHandleGuard.SimpleOwner {
                         NativeTesting.TESTING_FakeChatRemoteEnd_ReceiveIncomingRequest(
                             asyncContextHandle, fakeRemote)))
         .thenApply(
-            rawRequest -> {
-              var sentRequest = (Pair<Long, Long>) rawRequest;
-              return new Pair(new InternalRequest(sentRequest.getFirst()), sentRequest.getSecond());
+            sentRequest -> {
+              try {
+                var httpRequest =
+                    new InternalRequest(
+                        NativeTesting.TESTING_FakeChatSentRequest_TakeHttpRequest(sentRequest));
+                var requestId = NativeTesting.TESTING_FakeChatSentRequest_RequestId(sentRequest);
+                return new Pair<>(httpRequest, requestId);
+              } finally {
+                NativeTesting.FakeChatSentRequest_Destroy(sentRequest);
+              }
             });
   }
 

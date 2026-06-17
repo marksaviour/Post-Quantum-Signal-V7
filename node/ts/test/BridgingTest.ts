@@ -5,9 +5,9 @@
 
 import * as uuid from 'uuid';
 import { assert, use } from 'chai';
-import chaiAsPromised from 'chai-as-promised';
-import * as Native from '../Native.js';
-import { BridgedStringMap } from '../internal.js';
+import * as chaiAsPromised from 'chai-as-promised';
+import * as Native from '../../Native';
+import { BridgedStringMap } from '../internal';
 
 use(chaiAsPromised);
 
@@ -106,9 +106,9 @@ describe('bridge_fn', () => {
 
   it('can process bytestring arrays', () => {
     const result = Native.TESTING_ProcessBytestringArray([
-      Uint8Array.of(1, 2, 3),
-      Uint8Array.of(),
-      Uint8Array.of(4, 5, 6),
+      Buffer.of(1, 2, 3),
+      Buffer.of(),
+      Buffer.of(4, 5, 6),
     ]);
     assert.deepStrictEqual(
       result.map((buffer) => Array.from(buffer)),
@@ -195,17 +195,11 @@ describe('bridge_fn', () => {
     const present = Native.TESTING_ConvertOptionalUuid(true);
     assert.deepEqual(
       present,
-      uuid.parse('abababab-1212-8989-baba-565656565656')
+      Buffer.from(uuid.parse('abababab-1212-8989-baba-565656565656'))
     );
 
     const absent = Native.TESTING_ConvertOptionalUuid(false);
     assert.isNull(absent);
-  });
-
-  it('can return pairs', () => {
-    const [num, str] = Native.TESTING_ReturnPair();
-    assert.equal(num, 1);
-    assert.equal(str, 'libsignal');
   });
 });
 

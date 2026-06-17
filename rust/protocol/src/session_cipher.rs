@@ -11,18 +11,17 @@ use crate::consts::{MAX_FORWARD_JUMPS, MAX_UNACKNOWLEDGED_SESSION_AGE};
 use crate::ratchet::{ChainKey, MessageKeyGenerator};
 use crate::state::{InvalidSessionError, SessionState};
 use crate::{
-    CiphertextMessage, CiphertextMessageType, Direction, IdentityKeyStore, KeyPair, KyberPayload,
-    KyberPreKeyStore, PreKeySignalMessage, PreKeyStore, ProtocolAddress, PublicKey, Result,
-    SessionRecord, SessionStore, SignalMessage, SignalProtocolError, SignedPreKeyStore, session,
+    session, CiphertextMessage, CiphertextMessageType, Direction, IdentityKeyStore, KeyPair,
+    KyberPayload, KyberPreKeyStore, PreKeySignalMessage, PreKeyStore, ProtocolAddress, PublicKey,
+    Result, SessionRecord, SessionStore, SignalMessage, SignalProtocolError, SignedPreKeyStore,
 };
 
-pub async fn message_encrypt<R: Rng + CryptoRng>(
+pub async fn message_encrypt(
     ptext: &[u8],
     remote_address: &ProtocolAddress,
     session_store: &mut dyn SessionStore,
     identity_store: &mut dyn IdentityKeyStore,
     now: SystemTime,
-    csprng: &mut R,
 ) -> Result<CiphertextMessage> {
     let mut session_record = session_store
         .load_session(remote_address)
@@ -34,14 +33,7 @@ pub async fn message_encrypt<R: Rng + CryptoRng>(
 
     let chain_key = session_state.get_sender_chain_key()?;
 
-    let (pqr_msg, pqr_key) = session_state.pq_ratchet_send(csprng).map_err(|e| {
-        // Since we're sending, this must be an error with the state.
-        SignalProtocolError::InvalidState(
-            "message_encrypt",
-            format!("post-quantum ratchet send error: {e}"),
-        )
-    })?;
-    let message_keys = chain_key.message_keys().generate_keys(pqr_key);
+    let message_keys = chain_key.message_keys().generate_keys();
 
     let sender_ephemeral = session_state.sender_ratchet_key()?;
     let previous_counter = session_state.previous_counter();
@@ -98,7 +90,6 @@ pub async fn message_encrypt<R: Rng + CryptoRng>(
             &ctext,
             &local_identity_key,
             &their_identity_key,
-            &pqr_msg,
         )?;
 
         let kyber_payload = items
@@ -126,7 +117,6 @@ pub async fn message_encrypt<R: Rng + CryptoRng>(
             &ctext,
             &local_identity_key,
             &their_identity_key,
-            &pqr_msg,
         )?)
     };
 
@@ -254,25 +244,19 @@ pub async fn message_decrypt_prekey<R: Rng + CryptoRng>(
         )
         .await?;
 
-    if let Some(pre_key_used) = pre_key_used {
-        if let Some(kyber_pre_key_id) = pre_key_used.kyber_pre_key_id {
-            kyber_pre_key_store
-                .mark_kyber_pre_key_used(
-                    kyber_pre_key_id,
-                    pre_key_used.signed_ec_pre_key_id,
-                    ciphertext.base_key(),
-                )
-                .await?;
-        }
-
-        if let Some(pre_key_id) = pre_key_used.one_time_ec_pre_key_id {
-            pre_key_store.remove_pre_key(pre_key_id).await?;
-        }
-    }
-
     session_store
         .store_session(remote_address, &session_record)
         .await?;
+
+    if let Some(pre_key_id) = pre_key_used.pre_key_id {
+        pre_key_store.remove_pre_key(pre_key_id).await?;
+    }
+
+    if let Some(kyber_pre_key_id) = pre_key_used.kyber_pre_key_id {
+        kyber_pre_key_store
+            .mark_kyber_pre_key_used(kyber_pre_key_id)
+            .await?;
+    }
 
     Ok(ptext)
 }
@@ -558,9 +542,8 @@ fn decrypt_message_with_record<R: Rng + CryptoRng>(
             log::error!(
                 "No valid session for recipient: {}, current session base key {}, number of previous states: {}",
                 remote_address,
-                current_state
-                    .sender_ratchet_key_for_logging()
-                    .unwrap_or_else(|e| format!("<error: {e}>")),
+                current_state.sender_ratchet_key_for_logging()
+                .unwrap_or_else(|e| format!("<error: {e}>")),
                 previous_state_count(),
             );
         } else {
@@ -622,30 +605,15 @@ fn decrypt_message_with_state<R: Rng + CryptoRng>(
     let their_ephemeral = ciphertext.sender_ratchet_key();
     let counter = ciphertext.counter();
     let chain_key = get_or_create_chain_key(state, their_ephemeral, remote_address, csprng)?;
-    let message_key_gen = get_or_create_message_key(
+    let message_keys = get_or_create_message_key(
         state,
         their_ephemeral,
         remote_address,
         original_message_type,
         &chain_key,
         counter,
-    )?;
-    let pqr_key = state
-        .pq_ratchet_recv(ciphertext.pq_ratchet())
-        .map_err(|e| match e {
-            spqr::Error::StateDecode => SignalProtocolError::InvalidState(
-                "decrypt_message_with_state",
-                format!("post-quantum ratchet error: {e}"),
-            ),
-            _ => {
-                log::info!("post-quantum ratchet error in decrypt_message_with_state: {e}");
-                SignalProtocolError::InvalidMessage(
-                    original_message_type,
-                    "post-quantum ratchet error",
-                )
-            }
-        })?;
-    let message_keys = message_key_gen.generate_keys(pqr_key);
+    )?
+    .generate_keys();
 
     let their_identity_key =
         state

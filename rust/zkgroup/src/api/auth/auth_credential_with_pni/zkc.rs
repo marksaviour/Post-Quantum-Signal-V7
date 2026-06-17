@@ -38,7 +38,7 @@ pub struct AuthCredentialWithPniZkcResponse {
     proof: zkcredential::issuance::IssuanceProof,
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialDefault)]
+#[derive(Serialize, Deserialize, PartialDefault)]
 pub struct AuthCredentialWithPniZkcPresentation {
     version: VersionByte<PRESENTATION_VERSION_4>,
     proof: zkcredential::presentation::PresentationProof,

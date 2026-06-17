@@ -68,13 +68,6 @@ public class NativeHandleGuard implements AutoCloseable {
 
     protected abstract void release(long nativeHandle);
 
-    protected static final long throwIfNull(long handle) {
-      if (handle == 0L) {
-        throw new NullPointerException();
-      }
-      return handle;
-    }
-
     @Override
     @CalledFromNative
     public long unsafeNativeHandleWithoutGuard() {
@@ -88,11 +81,6 @@ public class NativeHandleGuard implements AutoCloseable {
     }
   }
 
-  // A note on synchronization.
-  //
-  // close is synchronized to eliminate the race between it and finalize.
-  //
-  // All in the name of calling release exactly once.
   public abstract static class CloseableOwner extends SimpleOwner implements AutoCloseable {
     private boolean isClosed = false;
 
@@ -101,7 +89,7 @@ public class NativeHandleGuard implements AutoCloseable {
     }
 
     @Override
-    public synchronized void close() {
+    public void close() {
       if (isClosed) {
         return;
       }

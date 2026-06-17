@@ -12,7 +12,6 @@ fn test_hsm_enclave_happy_path() -> Result<()> {
         snow::Builder::new(client_connection::NOISE_PATTERN.parse()?).generate_keypair()?;
     let mut server_hs = snow::Builder::new(client_connection::NOISE_PATTERN.parse()?)
         .local_private_key(&keypair.private)
-        .unwrap()
         .build_responder()?;
 
     // Spin up the client connection establishment.
@@ -60,7 +59,6 @@ fn test_hsm_enclave_codehash_mismatch() -> Result<()> {
         snow::Builder::new(client_connection::NOISE_PATTERN.parse()?).generate_keypair()?;
     let mut server_hs = snow::Builder::new(client_connection::NOISE_PATTERN.parse()?)
         .local_private_key(&keypair.private)
-        .unwrap()
         .build_responder()?;
 
     // Spin up the client connection establishment.

@@ -30,24 +30,22 @@ public class IncrementalMacContext: NativeHandleOwner<SignalMutPointerIncrementa
     public convenience init<Key: ContiguousBytes>(key: Key, chunkSize sizeChoice: SizeChoice) throws {
         let chunkSize = try sizeChoice.sizeInBytes()
         let handle = try key.withUnsafeBorrowedBuffer { keyBuffer in
-            try invokeFnReturningValueByPointer(.init()) {
-                signal_incremental_mac_initialize($0, keyBuffer, chunkSize)
-            }
+            var macHandle = SignalMutPointerIncrementalMac()
+            try checkError(signal_incremental_mac_initialize(&macHandle, keyBuffer, chunkSize))
+            return macHandle
         }
         self.init(owned: NonNull(handle)!)
         self.chunkSizeInBytes = chunkSize
     }
 
-    override internal class func destroyNativeHandle(
-        _ handle: NonNull<SignalMutPointerIncrementalMac>
-    ) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerIncrementalMac>) -> SignalFfiErrorRef? {
         return signal_incremental_mac_destroy(handle.pointer)
     }
 
     public func update<Bytes: ContiguousBytes>(_ bytes: Bytes) throws {
         let digest = try bytes.withUnsafeBorrowedBuffer { bytesPtr in
             try withNativeHandle { nativeHandle in
-                try invokeFnReturningData {
+                try invokeFnReturningArray {
                     signal_incremental_mac_update($0, nativeHandle, bytesPtr, 0, UInt32(bytesPtr.length))
                 }
             }
@@ -55,15 +53,15 @@ public class IncrementalMacContext: NativeHandleOwner<SignalMutPointerIncrementa
         self._digest.append(contentsOf: digest)
     }
 
-    public func finalize() throws -> Data {
+    public func finalize() throws -> [UInt8] {
         let digest =
             try withNativeHandle { nativeHandle in
-                try invokeFnReturningData {
+                try invokeFnReturningArray {
                     signal_incremental_mac_finalize($0, nativeHandle)
                 }
             }
         self._digest.append(contentsOf: digest)
-        return Data(self._digest)
+        return Array(self._digest)
     }
 }
 
@@ -91,20 +89,15 @@ public class ValidatingMacContext: NativeHandleOwner<SignalMutPointerValidatingM
         let chunkSize = try sizeChoice.sizeInBytes()
         let handle = try key.withUnsafeBorrowedBuffer { keyBuffer in
             try digest.withUnsafeBorrowedBuffer { digestBuffer in
-                try invokeFnReturningValueByPointer(.init()) {
-                    signal_validating_mac_initialize($0, keyBuffer, chunkSize, digestBuffer)
-                }
+                var macHandle = SignalMutPointerValidatingMac()
+                try checkError(signal_validating_mac_initialize(&macHandle, keyBuffer, chunkSize, digestBuffer))
+                return macHandle
             }
         }
-        guard let checkedHandle = NonNull<SignalMutPointerValidatingMac>(handle) else {
-            throw SignalError.verificationFailed("invalid configuration data")
-        }
-        self.init(owned: checkedHandle)
+        self.init(owned: NonNull(handle)!)
     }
 
-    override internal class func destroyNativeHandle(
-        _ handle: NonNull<SignalMutPointerValidatingMac>
-    ) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerValidatingMac>) -> SignalFfiErrorRef? {
         return signal_validating_mac_destroy(handle.pointer)
     }
 

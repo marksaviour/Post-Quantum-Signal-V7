@@ -15,9 +15,9 @@ use uuid::Uuid;
 
 use crate::storage::traits::{self, IdentityChange};
 use crate::{
-    CiphertextMessageType, IdentityKey, IdentityKeyPair, KyberPreKeyId, KyberPreKeyRecord,
-    PreKeyId, PreKeyRecord, ProtocolAddress, PublicKey, Result, SenderKeyRecord, SessionRecord,
-    SignalProtocolError, SignedPreKeyId, SignedPreKeyRecord,
+    IdentityKey, IdentityKeyPair, KyberPreKeyId, KyberPreKeyRecord, PreKeyId, PreKeyRecord,
+    ProtocolAddress, Result, SenderKeyRecord, SessionRecord, SignalProtocolError, SignedPreKeyId,
+    SignedPreKeyRecord,
 };
 
 /// Reference implementation of [traits::IdentityKeyStore].
@@ -193,14 +193,10 @@ impl traits::SignedPreKeyStore for InMemSignedPreKeyStore {
     }
 }
 
-/// Basic implementation of [traits::KyberPreKeyStore].
-///
-/// Note that this implementation does not clear any keys upon use! This is correct for last-resort
-/// keys, but a real client would normally have a set of one-time keys to use first.
+/// Reference implementation of [traits::KyberPreKeyStore].
 #[derive(Clone)]
 pub struct InMemKyberPreKeyStore {
     kyber_pre_keys: HashMap<KyberPreKeyId, KyberPreKeyRecord>,
-    base_keys_seen: HashMap<(KyberPreKeyId, SignedPreKeyId), Vec<PublicKey>>,
 }
 
 impl InMemKyberPreKeyStore {
@@ -208,7 +204,6 @@ impl InMemKyberPreKeyStore {
     pub fn new() -> Self {
         Self {
             kyber_pre_keys: HashMap::new(),
-            base_keys_seen: HashMap::new(),
         }
     }
 
@@ -244,23 +239,7 @@ impl traits::KyberPreKeyStore for InMemKyberPreKeyStore {
         Ok(())
     }
 
-    async fn mark_kyber_pre_key_used(
-        &mut self,
-        kyber_prekey_id: KyberPreKeyId,
-        ec_prekey_id: SignedPreKeyId,
-        base_key: &PublicKey,
-    ) -> Result<()> {
-        let base_keys_seen = self
-            .base_keys_seen
-            .entry((kyber_prekey_id, ec_prekey_id))
-            .or_default();
-        if base_keys_seen.contains(base_key) {
-            return Err(SignalProtocolError::InvalidMessage(
-                CiphertextMessageType::PreKey,
-                "reused base key",
-            ));
-        }
-        base_keys_seen.push(*base_key);
+    async fn mark_kyber_pre_key_used(&mut self, _kyber_prekey_id: KyberPreKeyId) -> Result<()> {
         Ok(())
     }
 }
@@ -500,14 +479,9 @@ impl traits::KyberPreKeyStore for InMemSignalProtocolStore {
             .await
     }
 
-    async fn mark_kyber_pre_key_used(
-        &mut self,
-        kyber_prekey_id: KyberPreKeyId,
-        ec_prekey_id: SignedPreKeyId,
-        base_key: &PublicKey,
-    ) -> Result<()> {
+    async fn mark_kyber_pre_key_used(&mut self, kyber_prekey_id: KyberPreKeyId) -> Result<()> {
         self.kyber_pre_key_store
-            .mark_kyber_pre_key_used(kyber_prekey_id, ec_prekey_id, base_key)
+            .mark_kyber_pre_key_used(kyber_prekey_id)
             .await
     }
 }

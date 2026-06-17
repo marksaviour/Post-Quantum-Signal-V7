@@ -3,35 +3,26 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-use std::ffi::{CStr, c_char, c_uchar};
+use std::ffi::{c_char, c_uchar, CStr};
 use std::fmt::Display;
 use std::num::{NonZeroU64, ParseIntError};
 use std::ops::Deref;
 
 use itertools::Itertools as _;
 use libsignal_account_keys::{AccountEntropyPool, InvalidAccountEntropyPool};
-use libsignal_net_chat::api::ChallengeOption;
-use libsignal_net_chat::api::registration::PushToken;
+use libsignal_net::registration::PushTokenType;
 use libsignal_protocol::*;
 use paste::paste;
 use uuid::Uuid;
-use zkgroup::ZkGroupDeserializationFailure;
 
 use super::*;
 use crate::io::{InputStream, SyncInputStream};
-use crate::net::chat::{
-    ChatListener, FfiChatListenerStruct, FfiProvisioningListenerStruct, ProvisioningListener,
-};
+use crate::net::chat::ChatListener;
 use crate::net::registration::{
-    ConnectChatBridge, RegistrationCreateSessionRequest, RegistrationPushToken,
+    ConnectChatBridge, RegistrationCreateSessionRequest, RegistrationPushTokenType,
+    RegistrationSessionRequestedInformation,
 };
-use crate::protocol::storage::{
-    FfiBridgeKyberPreKeyStoreStruct, FfiBridgePreKeyStoreStruct, FfiBridgeSignedPreKeyStoreStruct,
-};
-use crate::support::{
-    AsType, BridgedCallbacks, FixedLengthBincodeSerializable, IllegalArgumentError, Serialized,
-    extend_lifetime,
-};
+use crate::support::{extend_lifetime, AsType, FixedLengthBincodeSerializable, Serialized};
 
 /// Converts arguments from their FFI form to their Rust form.
 ///
@@ -113,32 +104,6 @@ where
     }
 }
 
-/// A variation of [`ArgTypeInfo`] for callback results.
-///
-/// All [`SimpleArgTypeInfo`] implementations are reusable for this, but the general [`ArgTypeInfo`]
-/// allows borrowing from the foreign value and a callback result can't do that.
-pub trait CallbackResultTypeInfo: Sized {
-    /// The FFI form of the argument (e.g. `std::ffi::c_uchar`).
-    type ResultType;
-    /// Converts the data in `foreign` to the Rust type.
-    fn convert_from_callback(foreign: Self::ResultType) -> SignalFfiResult<Self>;
-}
-
-impl<T: SimpleArgTypeInfo> CallbackResultTypeInfo for T {
-    type ResultType = <Self as SimpleArgTypeInfo>::ArgType;
-
-    fn convert_from_callback(foreign: Self::ResultType) -> SignalFfiResult<Self> {
-        T::convert_from(foreign)
-    }
-}
-
-impl CallbackResultTypeInfo for () {
-    type ResultType = std::ffi::c_void;
-    fn convert_from_callback(_foreign: Self::ResultType) -> SignalFfiResult<Self> {
-        Ok(())
-    }
-}
-
 /// Converts result values from their Rust form to their FFI form.
 ///
 /// `ResultTypeInfo` is used to implement the `bridge_fn` macro, but can also be used outside it.
@@ -188,17 +153,6 @@ impl<'a> ArgTypeInfo<'a> for &'a mut [u8] {
     }
     fn load_from(stored: &'a mut Self::StoredType) -> Self {
         unsafe { stored.as_slice_mut().expect("checked earlier") }
-    }
-}
-
-impl ResultTypeInfo for &'_ mut [u8] {
-    type ResultType = BorrowedMutableSliceOf<c_uchar>;
-
-    fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
-        Ok(BorrowedMutableSliceOf {
-            base: self.as_mut_ptr(),
-            length: self.len(),
-        })
     }
 }
 
@@ -294,33 +248,33 @@ impl SimpleArgTypeInfo for Option<String> {
 }
 
 impl SimpleArgTypeInfo for uuid::Uuid {
-    type ArgType = super::Uuid;
+    type ArgType = *const [u8; 16];
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn convert_from(foreign: Self::ArgType) -> SignalFfiResult<Self> {
-        Ok(uuid::Uuid::from_bytes(foreign.bytes))
+        match unsafe { foreign.as_ref() } {
+            Some(array) => Ok(uuid::Uuid::from_bytes(*array)),
+            None => Err(NullPointerError.into()),
+        }
     }
 }
 
 impl ResultTypeInfo for uuid::Uuid {
-    type ResultType = super::Uuid;
+    type ResultType = uuid::Bytes;
     fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
-        Ok(super::Uuid {
-            bytes: *self.as_bytes(),
-        })
+        Ok(*self.as_bytes())
     }
 }
 
 impl ResultTypeInfo for Option<uuid::Uuid> {
-    type ResultType = OptionalUuid;
+    type ResultType = [u8; 17];
     fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
+        let mut bytes = [0; 17];
         if let Some(uuid) = self {
-            Ok(OptionalUuid {
-                present: true,
-                bytes: *uuid.as_bytes(),
-            })
-        } else {
-            Ok(OptionalUuid::default())
+            let (present, out) = bytes.split_first_mut().expect("not empty");
+            *present = true.into();
+            out.copy_from_slice(uuid.as_bytes());
         }
+        Ok(bytes)
     }
 }
 
@@ -332,7 +286,10 @@ impl SimpleArgTypeInfo for libsignal_protocol::ServiceId {
             Some(array) => {
                 libsignal_protocol::ServiceId::parse_from_service_id_fixed_width_binary(array)
                     .ok_or_else(|| {
-                        IllegalArgumentError::new("invalid Service-Id-FixedWidthBinary").into()
+                        SignalProtocolError::InvalidArgument(
+                            "invalid Service-Id-FixedWidthBinary".to_string(),
+                        )
+                        .into()
                     })
             }
             None => Err(NullPointerError.into()),
@@ -352,7 +309,7 @@ impl SimpleArgTypeInfo for libsignal_protocol::Aci {
     fn convert_from(foreign: Self::ArgType) -> SignalFfiResult<Self> {
         libsignal_protocol::ServiceId::convert_from(foreign)?
             .try_into()
-            .map_err(|_| IllegalArgumentError::new("not an ACI").into())
+            .map_err(|_| SignalProtocolError::InvalidArgument("not an ACI".to_string()).into())
     }
 }
 
@@ -368,14 +325,14 @@ impl SimpleArgTypeInfo for libsignal_protocol::Pni {
     fn convert_from(foreign: Self::ArgType) -> SignalFfiResult<Self> {
         libsignal_protocol::ServiceId::convert_from(foreign)?
             .try_into()
-            .map_err(|_| IllegalArgumentError::new("not a PNI").into())
+            .map_err(|_| SignalProtocolError::InvalidArgument("not a PNI".to_string()).into())
     }
 }
 
 fn parse_e164(s: &str) -> SignalFfiResult<libsignal_core::E164> {
-    let parsed = s
-        .parse()
-        .map_err(|_: ParseIntError| IllegalArgumentError::new(format!("{s} is not an e164")))?;
+    let parsed = s.parse().map_err(|_: ParseIntError| {
+        SignalProtocolError::InvalidArgument(format!("{s} is not an e164"))
+    })?;
     Ok(parsed)
 }
 
@@ -402,27 +359,8 @@ impl SimpleArgTypeInfo for AccountEntropyPool {
     fn convert_from(foreign: Self::ArgType) -> SignalFfiResult<Self> {
         let string = String::convert_from(foreign)?;
         string.parse().map_err(|e: InvalidAccountEntropyPool| {
-            IllegalArgumentError::new(format!("bad account entropy pool: {e}")).into()
+            SignalProtocolError::InvalidArgument(format!("bad account entropy pool: {e}")).into()
         })
-    }
-}
-
-impl SimpleArgTypeInfo for libsignal_net_chat::api::messages::MultiRecipientSendAuthorization {
-    type ArgType = BorrowedSliceOf<c_uchar>;
-
-    fn convert_from(foreign: Self::ArgType) -> SignalFfiResult<Self> {
-        let slice = unsafe { foreign.as_slice()? };
-        // If we ever have more than two options, we won't be able to just use "empty" for one of
-        // them, but for now this is convenient.
-        if slice.is_empty() {
-            Ok(Self::Story)
-        } else {
-            let token =
-                zkgroup::deserialize(slice).map_err(|_: ZkGroupDeserializationFailure| {
-                    IllegalArgumentError::new("bad GroupSendFullToken")
-                })?;
-            Ok(Self::Group(token))
-        }
     }
 }
 
@@ -461,13 +399,19 @@ impl<const LEN: usize> ResultTypeInfo for [u8; LEN] {
 impl SimpleArgTypeInfo for Box<[String]> {
     type ArgType = BorrowedBytestringArray;
     fn convert_from(foreign: Self::ArgType) -> SignalFfiResult<Self> {
-        unsafe { foreign.iter()? }
-            .map(|bytes| {
-                Ok(std::str::from_utf8(bytes)
-                    .map_err(|_| IllegalArgumentError::new("invalid UTF-8"))?
-                    .to_owned())
-            })
-            .try_collect()
+        let BorrowedBytestringArray { bytes, lengths } = foreign;
+        let (mut bytes, lengths) = unsafe { (bytes.as_slice()?, lengths.as_slice()?) };
+
+        let mut out = Vec::with_capacity(lengths.len());
+        for length in lengths {
+            let string;
+            (string, bytes) = bytes.split_at(*length);
+            let string = std::str::from_utf8(string)
+                .map_err(|_| SignalProtocolError::InvalidArgument("invalid UTF-8".to_string()))?;
+            out.push(string.to_owned())
+        }
+
+        Ok(out.into_boxed_slice())
     }
 }
 
@@ -481,46 +425,33 @@ impl SimpleArgTypeInfo for Option<Box<[u8]>> {
     }
 }
 
-impl SimpleArgTypeInfo for libsignal_net::chat::LanguageList {
-    type ArgType = <Box<[String]> as SimpleArgTypeInfo>::ArgType;
-
-    fn convert_from(foreign: Self::ArgType) -> SignalFfiResult<Self> {
-        let entries: Vec<&str> = unsafe { foreign.iter()? }
-            .map(|bytes| {
-                std::str::from_utf8(bytes).map_err(|_| IllegalArgumentError::new("invalid UTF-8"))
-            })
-            .try_collect()?;
-        Ok(libsignal_net::chat::LanguageList::parse(&entries)
-            .map_err(|_| IllegalArgumentError::new("invalid language in list"))?)
-    }
-}
-
-impl SimpleArgTypeInfo for &libsignal_account_keys::BackupKey {
-    type ArgType = *const crate::net::svrb::BackupKeyBytes;
-
-    #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    fn convert_from(arg: Self::ArgType) -> SignalFfiResult<Self> {
-        unsafe { arg.as_ref() }
-            .ok_or(NullPointerError.into())
-            .map(Into::into)
-    }
-}
-
 macro_rules! bridge_trait {
     ($name:ident) => {
         paste! {
             impl<'a> ArgTypeInfo<'a> for &'a mut dyn $name {
-                type ArgType = crate::ffi::ConstPointer< [<FfiBridge $name Struct >] >;
-                type StoredType = BridgedCallbacks<OwnedCallbackStruct< [<FfiBridge $name Struct >] >>;
+                type ArgType = crate::ffi::ConstPointer< [<Ffi $name Struct>] >;
+                type StoredType = &'a [<Ffi $name Struct>];
                 #[allow(clippy::not_unsafe_ptr_arg_deref)]
                 fn borrow(foreign: Self::ArgType) -> SignalFfiResult<Self::StoredType> {
                     match unsafe { foreign.into_inner().as_ref() } {
                         None => Err(NullPointerError.into()),
-                        Some(store) => Ok(BridgedCallbacks(OwnedCallbackStruct(store.clone()))),
+                        Some(store) => Ok(store),
                     }
                 }
                 fn load_from(stored: &'a mut Self::StoredType) -> Self {
                     stored
+                }
+            }
+
+            impl<'a> ArgTypeInfo<'a> for Option<&'a dyn $name> {
+                type ArgType = crate::ffi::ConstPointer< [<Ffi $name Struct>] >;
+                type StoredType = Option<&'a [<Ffi $name Struct>]>;
+                #[allow(clippy::not_unsafe_ptr_arg_deref)]
+                fn borrow(foreign: Self::ArgType) -> SignalFfiResult<Self::StoredType> {
+                    Ok(unsafe { foreign.into_inner().as_ref() })
+                }
+                fn load_from(stored: &'a mut Self::StoredType) -> Self {
+                    stored.as_ref().map(|x| x as &'a dyn $name)
                 }
             }
         }
@@ -542,13 +473,11 @@ impl<'a> ArgTypeInfo<'a> for Box<dyn ChatListener> {
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn borrow(foreign: Self::ArgType) -> SignalFfiResult<Self::StoredType> {
         Ok(Some(unsafe {
-            Box::new(OwnedCallbackStruct(
-                foreign
-                    .into_inner()
-                    .as_ref()
-                    .ok_or(NullPointerError)?
-                    .clone(),
-            ))
+            foreign
+                .into_inner()
+                .as_ref()
+                .ok_or(NullPointerError)?
+                .make_listener()
         }))
     }
     fn load_from(stored: &'a mut Self::StoredType) -> Self {
@@ -565,31 +494,11 @@ impl<'a> ArgTypeInfo<'a> for Option<Box<dyn ChatListener>> {
             foreign
                 .into_inner()
                 .as_ref()
-                .map(|f| Box::new(OwnedCallbackStruct(f.clone())) as Box<_>)
+                .map(|f| f.make_listener() as Box<_>)
         })
     }
     fn load_from(stored: &'a mut Self::StoredType) -> Self {
         stored.take().map(|b| b as Box<_>)
-    }
-}
-
-impl<'a> ArgTypeInfo<'a> for Box<dyn ProvisioningListener> {
-    type ArgType = crate::ffi::ConstPointer<FfiProvisioningListenerStruct>;
-    type StoredType = Option<Box<dyn ProvisioningListener>>;
-    #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    fn borrow(foreign: Self::ArgType) -> SignalFfiResult<Self::StoredType> {
-        Ok(Some(unsafe {
-            Box::new(OwnedCallbackStruct(
-                foreign
-                    .into_inner()
-                    .as_ref()
-                    .ok_or(NullPointerError)?
-                    .clone(),
-            ))
-        }))
-    }
-    fn load_from(stored: &'a mut Self::StoredType) -> Self {
-        stored.take().expect("not previously taken")
     }
 }
 
@@ -601,13 +510,11 @@ impl SimpleArgTypeInfo for Box<dyn ConnectChatBridge> {
     }
 }
 
-impl SimpleArgTypeInfo for RegistrationPushToken {
-    type ArgType = *const std::ffi::c_char;
-    fn convert_from(foreign: Self::ArgType) -> SignalFfiResult<Self> {
+impl SimpleArgTypeInfo for RegistrationPushTokenType {
+    type ArgType = *const std::ffi::c_void;
+    fn convert_from(_foreign: Self::ArgType) -> SignalFfiResult<Self> {
         // FFI is only used from Apple platforms.
-        Ok(Self::Apn {
-            push_token: String::convert_from(foreign)?,
-        })
+        Ok(Self::Apn)
     }
 }
 
@@ -624,11 +531,11 @@ impl SimpleArgTypeInfo for RegistrationCreateSessionRequest {
         let push_token: Option<String> = SimpleArgTypeInfo::convert_from(push_token)?;
 
         // The FFI bindings are only used for Swift, which is used on Apple platforms.
-        let push_token = push_token.map(|push_token| PushToken::Apn { push_token });
-
+        let push_token_type = push_token.is_some().then_some(PushTokenType::Apn);
         Ok(Self {
             number: String::convert_from(number)?,
             push_token,
+            push_token_type,
             mcc: SimpleArgTypeInfo::convert_from(mcc)?,
             mnc: SimpleArgTypeInfo::convert_from(mnc)?,
         })
@@ -665,7 +572,7 @@ impl SimpleArgTypeInfo for crate::net::registration::SignedPublicPreKey {
 
 impl<T: ResultTypeInfo, E> ResultTypeInfo for Result<T, E>
 where
-    E: IntoFfiError,
+    E: FfiError,
 {
     type ResultType = T::ResultType;
     fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
@@ -729,13 +636,6 @@ impl ResultTypeInfo for Vec<u8> {
     type ResultType = OwnedBufferOf<std::ffi::c_uchar>;
     fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
         Ok(OwnedBufferOf::from(self.into_boxed_slice()))
-    }
-}
-
-impl ResultTypeInfo for bytes::Bytes {
-    type ResultType = OwnedBufferOf<std::ffi::c_uchar>;
-    fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
-        Vec::from(self).convert_into()
     }
 }
 
@@ -808,71 +708,19 @@ impl ResultTypeInfo for crate::zkgroup::Timestamp {
     }
 }
 
-impl ResultTypeInfo for Box<[ChallengeOption]> {
+impl ResultTypeInfo for Box<[RegistrationSessionRequestedInformation]> {
     type ResultType = <Vec<u8> as ResultTypeInfo>::ResultType;
     fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
-        static_assertions::assert_eq_size!(ChallengeOption, u8);
-        static_assertions::assert_eq_align!(ChallengeOption, u8);
-        // The compiler can optimize this iterated conversion away to nothing.
-        Ok(IntoIterator::into_iter(self)
-            .map(|r| r as u8)
-            .collect::<Box<_>>()
-            .into())
+        static_assertions::assert_eq_size!(RegistrationSessionRequestedInformation, u8);
+        static_assertions::assert_eq_align!(RegistrationSessionRequestedInformation, u8);
+        // Trivially droppable, like u8.
+        static_assertions::assert_impl_all!(RegistrationSessionRequestedInformation: Copy);
+        let b: Box<[u8]> = unsafe { std::mem::transmute(self) };
+        Ok(b.into())
     }
 }
 
-impl ResultTypeInfo for &[ChallengeOption] {
-    type ResultType = <Vec<u8> as ResultTypeInfo>::ResultType;
-    fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
-        Box::<[_]>::from(self).convert_into()
-    }
-}
-
-impl ResultTypeInfo for Vec<ServiceId> {
-    type ResultType = OwnedBufferOf<ServiceIdFixedWidthBinaryBytes>;
-
-    fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
-        Ok(self
-            .into_iter()
-            .map(|id| id.service_id_fixed_width_binary())
-            .collect::<Box<[_]>>()
-            .into())
-    }
-}
-
-impl ResultTypeInfo for &'_ [libsignal_net_chat::api::messages::MismatchedDeviceError] {
-    type ResultType = OwnedBufferOf<FfiMismatchedDevicesError>;
-
-    fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
-        Ok(self
-            .iter()
-            .map(|entry| FfiMismatchedDevicesError {
-                account: entry.account.service_id_fixed_width_binary(),
-                missing_devices: entry
-                    .missing_devices
-                    .iter()
-                    .map(|&id| id.into())
-                    .collect::<Box<[_]>>()
-                    .into(),
-                extra_devices: entry
-                    .extra_devices
-                    .iter()
-                    .map(|&id| id.into())
-                    .collect::<Box<[_]>>()
-                    .into(),
-                stale_devices: entry
-                    .stale_devices
-                    .iter()
-                    .map(|&id| id.into())
-                    .collect::<Box<[_]>>()
-                    .into(),
-            })
-            .collect::<Box<[_]>>()
-            .into())
-    }
-}
-
-impl ResultTypeInfo for Box<[libsignal_net_chat::api::registration::RegisterResponseBadge]> {
+impl ResultTypeInfo for Box<[libsignal_net::registration::RegisterResponseBadge]> {
     type ResultType = OwnedBufferOf<FfiRegisterResponseBadge>;
 
     fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
@@ -883,7 +731,7 @@ impl ResultTypeInfo for Box<[libsignal_net_chat::api::registration::RegisterResp
     }
 }
 
-impl ResultTypeInfo for libsignal_net_chat::api::registration::RegisterResponseBadge {
+impl ResultTypeInfo for libsignal_net::registration::RegisterResponseBadge {
     type ResultType = FfiRegisterResponseBadge;
 
     fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
@@ -960,25 +808,6 @@ impl<'a, T: BridgeHandle> ArgTypeInfo<'a> for &'a [&'a T] {
     }
 }
 
-impl<'a> ArgTypeInfo<'a> for &'a SignalFfiError {
-    // This is a lie, we can't *really* guarantee that the contents of an error are unwind-safe. But
-    // it's very unlikely we'll encounter one that isn't, especially when we only use them immutably
-    // in practice.
-    type ArgType = UnwindSafeArg<*const SignalFfiError>;
-    type StoredType = *const SignalFfiError;
-
-    fn borrow(foreign: Self::ArgType) -> SignalFfiResult<Self::StoredType> {
-        if foreign.is_null() {
-            return Err(NullPointerError.into());
-        }
-        Ok(foreign.0)
-    }
-
-    fn load_from(stored: &'a mut Self::StoredType) -> Self {
-        unsafe { stored.as_ref() }.expect("non-null checked above")
-    }
-}
-
 impl<T: BridgeHandle> ResultTypeInfo for T {
     type ResultType = MutPointer<T>;
     fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
@@ -1027,8 +856,11 @@ where
         let p = P::convert_from(foreign)?;
         p.try_into()
             .map_err(|e| {
-                IllegalArgumentError::new(format!("invalid {}: {e}", std::any::type_name::<T>()))
-                    .into()
+                SignalProtocolError::InvalidArgument(format!(
+                    "invalid {}: {e}",
+                    std::any::type_name::<T>()
+                ))
+                .into()
             })
             .map(AsType::from)
     }
@@ -1052,36 +884,6 @@ impl ResultTypeInfo for () {
 
     fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
         Ok(false)
-    }
-}
-
-impl<A: ResultTypeInfo, B: ResultTypeInfo> ResultTypeInfo for (A, B) {
-    type ResultType = PairOf<A::ResultType, B::ResultType>;
-
-    fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
-        Ok(PairOf {
-            first: self.0.convert_into()?,
-            second: self.1.convert_into()?,
-        })
-    }
-}
-
-impl<A: ResultTypeInfo, B: ResultTypeInfo> ResultTypeInfo for Option<(A, B)>
-where
-    A::ResultType: Default,
-    B::ResultType: Default,
-{
-    type ResultType = OptionalPairOf<A::ResultType, B::ResultType>;
-
-    fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
-        let Some(value) = self else {
-            return Ok(OptionalPairOf::default());
-        };
-        Ok(OptionalPairOf {
-            present: true,
-            first: value.0.convert_into()?,
-            second: value.1.convert_into()?,
-        })
     }
 }
 
@@ -1144,7 +946,7 @@ impl ResultTypeInfo for libsignal_net::chat::Response {
     }
 }
 
-impl ResultTypeInfo for libsignal_net_chat::api::registration::CheckSvr2CredentialsResponse {
+impl ResultTypeInfo for libsignal_net::registration::CheckSvr2CredentialsResponse {
     type ResultType = FfiCheckSvr2CredentialsResponse;
     fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
         let Self { matches } = self;
@@ -1162,32 +964,21 @@ impl ResultTypeInfo for libsignal_net_chat::api::registration::CheckSvr2Credenti
     }
 }
 
-impl ResultTypeInfo for libsignal_net::chat::server_requests::DisconnectCause {
-    type ResultType = *mut SignalFfiError;
-
-    fn convert_into(self) -> SignalFfiResult<Self::ResultType> {
-        match self {
-            Self::LocalDisconnect => Ok(std::ptr::null_mut()),
-            Self::Error(c) => Ok(SignalFfiError::from(c).into_raw_box_for_ffi()),
-        }
-    }
-}
-
 /// Defines an `extern "C"` function for cloning the given type.
 #[macro_export]
 macro_rules! ffi_bridge_handle_clone {
     ( $typ:ty as $ffi_name:ident ) => {
         ::paste::paste! {
-            #[unsafe(export_name = concat!(
+            #[export_name = concat!(
                 env!("LIBSIGNAL_BRIDGE_FN_PREFIX_FFI"),
                 stringify!($ffi_name),
                 "_clone",
-            ))]
+            )]
             pub unsafe extern "C" fn [<__bridge_handle_ffi_ $ffi_name _clone>](
                 new_obj: *mut ffi::MutPointer<$typ>,
                 obj: ffi::ConstPointer<$typ>,
             ) -> *mut $crate::ffi::SignalFfiError {
-                $crate::ffi::run_ffi_safe(|| unsafe {
+                $crate::ffi::run_ffi_safe(|| {
                     let obj = $crate::ffi::native_handle_cast::<$typ>(obj.into_inner())?;
                     $crate::ffi::write_result_to::<$typ>(new_obj, obj.clone())
                 })
@@ -1202,19 +993,6 @@ macro_rules! ffi_bridge_as_handle {
     ( $typ:ty as false $(, $($_:tt)*)? ) => {};
     ( $typ:ty as $ffi_name:ident ) => {
         impl $crate::ffi::BridgeHandle for $typ {}
-        // Unfortunately this conflicts with the blanket impl for the trait if done generically.
-        impl $crate::ffi::CallbackResultTypeInfo for $typ {
-            type ResultType = $crate::ffi::MutPointer<$typ>;
-            fn convert_from_callback(
-                foreign: Self::ResultType,
-            ) -> $crate::ffi::SignalFfiResult<Self> {
-                let foreign = foreign.into_inner();
-                if foreign.is_null() {
-                    return Err($crate::ffi::NullPointerError.into());
-                }
-                Ok(unsafe { *Box::from_raw(foreign) })
-            }
-        }
     };
     ( $typ:ty ) => {
         ::paste::paste! {
@@ -1241,31 +1019,6 @@ macro_rules! ffi_bridge_handle_fns {
     };
 }
 
-// This can't be done generically because it would conflict with the blanket impl, and it *also*
-// can't be done as part of the common `bridge_as_handle!` macro because when used outside this
-// crate it would violate the orphan rule. Perhaps there'll be a workaround later.
-macro_rules! optional_callback_result_type {
-    ($typ:ty) => {
-        impl CallbackResultTypeInfo for Option<$typ> {
-            type ResultType = MutPointer<$typ>;
-
-            fn convert_from_callback(foreign: Self::ResultType) -> SignalFfiResult<Self> {
-                if foreign == MutPointer::null() {
-                    return Ok(None);
-                }
-                <$typ>::convert_from_callback(foreign).map(Some)
-            }
-        }
-    };
-}
-
-optional_callback_result_type!(KyberPreKeyRecord);
-optional_callback_result_type!(PreKeyRecord);
-optional_callback_result_type!(PublicKey);
-optional_callback_result_type!(SenderKeyRecord);
-optional_callback_result_type!(SignedPreKeyRecord);
-optional_callback_result_type!(SessionRecord);
-
 macro_rules! trivial {
     ($typ:ty) => {
         impl SimpleArgTypeInfo for $typ {
@@ -1291,13 +1044,13 @@ trivial!(u64);
 trivial!(usize);
 trivial!(bool);
 
-/// Syntactically translates `bridge_fn` argument types (and callback result types) to FFI types for
-/// `cbindgen`.
+/// Syntactically translates `bridge_fn` argument types to FFI types for `cbindgen`.
 ///
 /// This is a syntactic transformation (because that's how Rust macros work), so new argument types
 /// will need to be added here directly even if they already implement [`ArgTypeInfo`]. The default
-/// behavior for references is to pass them through as pointers; the default behavior for `&mut dyn
-/// Foo` is to assume there's a struct called `ffi::FfiFooStruct` and produce a pointer to that.
+/// behavior for references is to pass them through as pointers; the default behavior for
+/// `&mut dyn Foo` is to assume there's a struct called `ffi::FfiFooStruct` and produce a pointer
+/// to that.
 #[macro_export]
 macro_rules! ffi_arg_type {
     (u8) => (u8);
@@ -1316,7 +1069,7 @@ macro_rules! ffi_arg_type {
     (Option<String>) => (*const std::ffi::c_char);
     (Option<&str>) => (*const std::ffi::c_char);
     (Timestamp) => (u64);
-    (Uuid) => (ffi::Uuid);
+    (Uuid) => (*const [u8; 16]);
     (ServiceId) => (*const libsignal_protocol::ServiceIdFixedWidthBinaryBytes);
     (Aci) => (*const libsignal_protocol::ServiceIdFixedWidthBinaryBytes);
     (Pni) => (*const libsignal_protocol::ServiceIdFixedWidthBinaryBytes);
@@ -1324,21 +1077,17 @@ macro_rules! ffi_arg_type {
     (Option<E164>) => (*const std::ffi::c_char);
     (AccountEntropyPool) => (*const std::ffi::c_char);
     (RegistrationCreateSessionRequest) => (ffi::FfiRegistrationCreateSessionRequest);
-    (RegistrationPushToken) => (*const std::ffi::c_char);
+    (RegistrationPushTokenType) => (*const std::ffi::c_void);
     (SignedPublicPreKey) => (ffi::FfiSignedPublicPreKey);
-    (MultiRecipientSendAuthorization) => (ffi_arg_type!(&[u8]));
-    (&SignalFfiError) => (ffi::UnwindSafeArg<*const SignalFfiError>);
     (&[u8; $len:expr]) => (*const [u8; $len]);
     (Option<&[u8; $len:expr]>) => (*const [u8; $len]);
     (&[& $typ:ty]) => (ffi::BorrowedSliceOf<ffi::ConstPointer< $typ >>);
     (&mut dyn $typ:ty) => (ffi::ConstPointer< ::paste::paste!(ffi::[<Ffi $typ Struct>]) >);
     (Option<&dyn $typ:ty>) => (ffi::ConstPointer< ::paste::paste!(ffi::[<Ffi $typ Struct>]) >);
-    (&BackupKey) => (*const $crate::net::svrb::BackupKeyBytes);
     (& $typ:ty) => (ffi::ConstPointer< $typ >);
     (&mut $typ:ty) => (ffi::MutPointer< $typ >);
     (Option<& $typ:ty>) => (ffi::ConstPointer< $typ >);
     (Box<[String]>) => (ffi::BorrowedBytestringArray);
-    (LanguageList) => (ffi::BorrowedBytestringArray);
     (Box<[u8]>) => (ffi::BorrowedSliceOf<std::ffi::c_uchar>);
     (Box<dyn $typ:ty >) => (ffi::ConstPointer< ::paste::paste!(ffi::[<Ffi $typ Struct>]) >);
     (Option<Box<dyn $typ:ty> >) => (ffi::ConstPointer< ::paste::paste!(ffi::[<Ffi $typ Struct>]) >);
@@ -1352,16 +1101,9 @@ macro_rules! ffi_arg_type {
     // In order to provide a fixed-sized array of the correct length,
     // a serialized type FooBar must have a constant FOO_BAR_LEN that's in scope (and exposed to C).
     (Serialized<$typ:ident>) => (*const [std::ffi::c_uchar; ::paste::paste!([<$typ:snake:upper _LEN>])]);
-
-    // For use in callbacks.
-    (Result<$typ:tt $(, $ignored:ty)?>) => (ffi_arg_type!($typ));
-    (Result<$typ:tt<$($args:tt),+> $(, $ignored:ty)?>) => (ffi_arg_type!($typ<$($args),+>));
-    (Option<$typ:ty>) => (ffi::MutPointer< $typ >);
-    ($typ:ty) => (ffi::MutPointer< $typ >);
 }
 
-/// Syntactically translates `bridge_fn` result types (and callback argument types) to FFI types for
-/// `cbindgen`.
+/// Syntactically translates `bridge_fn` result types to FFI types for `cbindgen`.
 ///
 /// This is a syntactic transformation (because that's how Rust macros work), so new result types
 /// will need to be added here directly even if they already implement [`ResultTypeInfo`]. The
@@ -1373,18 +1115,12 @@ macro_rules! ffi_result_type {
     // treated as a single unit, and we can't match multiple tokens because Rust's macros match
     // eagerly. Therefore, if you need to return a more complicated Result type, you'll have to add
     // another rule for its form.
-    (std::result::Result<$($rest:tt)+) => (ffi_result_type!(Result<$($rest)+));
     (Result<$typ:tt $(, $_:ty)?>) => (ffi_result_type!($typ));
     (Result<&$typ:tt $(, $_:ty)?>) => (ffi_result_type!(&$typ));
     (Result<Option<&$typ:tt> $(, $_:ty)?>) => (ffi_result_type!(&$typ));
     (Result<$typ:tt<$($args:tt),+> $(, $_:ty)?>) => (ffi_result_type!($typ<$($args)+>));
 
     (()) => (bool); // Only relevant for Futures.
-
-    // Like Result, we can't use `:ty` here because we need the resulting tokens to be matched
-    // recursively. We can at least match several tokens in the second component though.
-    (($a:tt, $($b:tt)+)) => (ffi::PairOf<ffi_result_type!($a), ffi_result_type!($($b)+)>);
-    (Option<($a:tt, $($b:tt)+)>) => (ffi::OptionalPairOf<ffi_result_type!($a), ffi_result_type!($($b)+)>);
 
     (u8) => (u8);
     (u16) => (u16);
@@ -1399,7 +1135,7 @@ macro_rules! ffi_result_type {
     (Option<String>) => (*const std::ffi::c_char);
     (Option<&str>) => (*const std::ffi::c_char);
     (Timestamp) => (u64);
-    (Uuid) => (ffi::Uuid);
+    (Uuid) => ([u8; 16]);
     (Option<Uuid>) => (ffi::OptionalUuid);
     (ServiceId) => (libsignal_protocol::ServiceIdFixedWidthBinaryBytes);
     (Aci) => (libsignal_protocol::ServiceIdFixedWidthBinaryBytes);
@@ -1408,28 +1144,21 @@ macro_rules! ffi_result_type {
     (&[u8]) => (ffi::OwnedBufferOf<std::ffi::c_uchar>);
     (Option<&[u8]>) => (ffi::OwnedBufferOf<std::ffi::c_uchar>);
     (Vec<u8>) => (ffi::OwnedBufferOf<std::ffi::c_uchar>);
-    (bytes::Bytes) => (ffi::OwnedBufferOf<std::ffi::c_uchar>);
     (Box<[String]>) => (ffi::StringArray);
     (Box<[Vec<u8>]>) => (ffi::BytestringArray);
-    (Box<[ChallengeOption]>) => (ffi_result_type!(Vec<u8>));
-    (Vec<ServiceId>) => (ffi::OwnedBufferOf<libsignal_protocol::ServiceIdFixedWidthBinaryBytes>);
-    (&[MismatchedDeviceError]) => (ffi::OwnedBufferOf<ffi::FfiMismatchedDevicesError>);
+    (Box<[RegistrationSessionRequestedInformation]>) => (ffi_result_type!(Vec<u8>));
     (Option<$typ:ty>) => ($crate::ffi::MutPointer<$typ>);
 
     (LookupResponse) => (ffi::FfiCdsiLookupResponse);
     (ChatResponse) => (ffi::FfiChatResponse);
     (CheckSvr2CredentialsResponse) => (ffi::FfiCheckSvr2CredentialsResponse);
     (Box<[RegisterResponseBadge]>) => (ffi::OwnedBufferOf<ffi::FfiRegisterResponseBadge>);
-    (DisconnectCause) => (*mut ffi::SignalFfiError);
 
     // In order to provide a fixed-sized array of the correct length,
     // a serialized type FooBar must have a constant FOO_BAR_LEN that's in scope (and exposed to C).
     (Serialized<$typ:ident>) => ([std::ffi::c_uchar; ::paste::paste!([<$typ:snake:upper _LEN>])]);
 
     (Ignored<$typ:ty>) => (*const std::ffi::c_void);
-
-    // Callback-specific --> safe to borrow.
-    (&mut [u8]) => (ffi::BorrowedMutableSliceOf<std::ffi::c_uchar>);
 
     ( $typ:ty ) => ($crate::ffi::MutPointer<$typ>);
 }

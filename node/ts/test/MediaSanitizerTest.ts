@@ -4,12 +4,12 @@
 //
 
 import { assert } from 'chai';
-import * as Mp4Sanitizer from '../Mp4Sanitizer.js';
-import * as WebpSanitizer from '../WebpSanitizer.js';
-import { SanitizedMetadata } from '../Mp4Sanitizer.js';
-import * as util from './util.js';
-import { ErrorCode, LibSignalErrorBase } from '../Errors.js';
-import { ErrorInputStream, Uint8ArrayInputStream } from './ioutil.js';
+import * as Mp4Sanitizer from '../Mp4Sanitizer';
+import * as WebpSanitizer from '../WebpSanitizer';
+import { SanitizedMetadata } from '../Mp4Sanitizer';
+import * as util from './util';
+import { ErrorCode, LibSignalErrorBase } from '../Errors';
+import { ErrorInputStream, Uint8ArrayInputStream } from './ioutil';
 
 util.initLogger();
 
@@ -90,7 +90,7 @@ describe('WebpSanitizer', () => {
     it('throws on empty input', () => {
       const input = new Uint8Array([]);
       try {
-        WebpSanitizer.sanitize(input);
+        WebpSanitizer.sanitize(Buffer.from(input));
         assert.fail('did not throw');
       } catch (e) {
         assert(e instanceof LibSignalErrorBase);
@@ -101,7 +101,7 @@ describe('WebpSanitizer', () => {
     it('throws on truncated input', () => {
       const input = new Uint8Array([0, 0, 0, 0]);
       try {
-        WebpSanitizer.sanitize(input);
+        WebpSanitizer.sanitize(Buffer.from(input));
         assert.fail('did not throw');
       } catch (e) {
         assert(e instanceof LibSignalErrorBase);
@@ -111,7 +111,7 @@ describe('WebpSanitizer', () => {
 
     it('accepts a minimal webp', () => {
       const input = new Uint8Array(webp());
-      WebpSanitizer.sanitize(input);
+      WebpSanitizer.sanitize(Buffer.from(input));
     });
   });
 });

@@ -14,7 +14,7 @@ use crate::state::{
     KyberPreKeyId, KyberPreKeyRecord, PreKeyId, PreKeyRecord, SessionRecord, SignedPreKeyId,
     SignedPreKeyRecord,
 };
-use crate::{IdentityKey, IdentityKeyPair, ProtocolAddress, PublicKey};
+use crate::{IdentityKey, IdentityKeyPair, ProtocolAddress};
 
 // TODO: consider moving this enum into utils.rs?
 /// Each Signal message can be considered to have exactly two participants, a sender and receiver.
@@ -127,16 +127,8 @@ pub trait KyberPreKeyStore {
     ) -> Result<()>;
 
     /// Mark the entry for `kyber_prekey_id` as "used".
-    ///
-    /// A one-time Kyber pre-key should be deleted after this point. A last-resort pre-key should
-    /// not immediately be deleted, but should check whether the same combination of pre-keys was
-    /// used with the given base key before, and produce an error if so.
-    async fn mark_kyber_pre_key_used(
-        &mut self,
-        kyber_prekey_id: KyberPreKeyId,
-        ec_prekey_id: SignedPreKeyId,
-        base_key: &PublicKey,
-    ) -> Result<()>;
+    /// This would mean different things for one-time and last-resort Kyber keys.
+    async fn mark_kyber_pre_key_used(&mut self, kyber_prekey_id: KyberPreKeyId) -> Result<()>;
 }
 
 /// Interface for a Signal client instance to store a session associated with another particular

@@ -14,18 +14,13 @@ public func signalEncrypt<Bytes: ContiguousBytes>(
     now: Date = Date(),
     context: StoreContext
 ) throws -> CiphertextMessage {
-    return try withAllBorrowed(address, .bytes(message)) { addressHandle, messageBuffer in
-        try withSessionStore(sessionStore, context) { ffiSessionStore in
-            try withIdentityKeyStore(identityStore, context) { ffiIdentityStore in
-                try invokeFnReturningNativeHandle {
-                    signal_encrypt_message(
-                        $0,
-                        messageBuffer,
-                        addressHandle.const(),
-                        ffiSessionStore,
-                        ffiIdentityStore,
-                        UInt64(now.timeIntervalSince1970 * 1000)
-                    )
+    return try address.withNativeHandle { addressHandle in
+        try message.withUnsafeBorrowedBuffer { messageBuffer in
+            try withSessionStore(sessionStore, context) { ffiSessionStore in
+                try withIdentityKeyStore(identityStore, context) { ffiIdentityStore in
+                    try invokeFnReturningNativeHandle {
+                        signal_encrypt_message($0, messageBuffer, addressHandle.const(), ffiSessionStore, ffiIdentityStore, UInt64(now.timeIntervalSince1970 * 1000))
+                    }
                 }
             }
         }
@@ -38,18 +33,12 @@ public func signalDecrypt(
     sessionStore: SessionStore,
     identityStore: IdentityKeyStore,
     context: StoreContext
-) throws -> Data {
-    return try withAllBorrowed(message, address) { messageHandle, addressHandle in
+) throws -> [UInt8] {
+    return try withNativeHandles(message, address) { messageHandle, addressHandle in
         try withSessionStore(sessionStore, context) { ffiSessionStore in
             try withIdentityKeyStore(identityStore, context) { ffiIdentityStore in
-                try invokeFnReturningData {
-                    signal_decrypt_message(
-                        $0,
-                        messageHandle.const(),
-                        addressHandle.const(),
-                        ffiSessionStore,
-                        ffiIdentityStore
-                    )
+                try invokeFnReturningArray {
+                    signal_decrypt_message($0, messageHandle.const(), addressHandle.const(), ffiSessionStore, ffiIdentityStore)
                 }
             }
         }
@@ -65,24 +54,15 @@ public func signalDecryptPreKey(
     signedPreKeyStore: SignedPreKeyStore,
     kyberPreKeyStore: KyberPreKeyStore,
     context: StoreContext
-) throws -> Data {
-    return try withAllBorrowed(message, address) { messageHandle, addressHandle in
+) throws -> [UInt8] {
+    return try withNativeHandles(message, address) { messageHandle, addressHandle in
         try withSessionStore(sessionStore, context) { ffiSessionStore in
             try withIdentityKeyStore(identityStore, context) { ffiIdentityStore in
                 try withPreKeyStore(preKeyStore, context) { ffiPreKeyStore in
                     try withSignedPreKeyStore(signedPreKeyStore, context) { ffiSignedPreKeyStore in
                         try withKyberPreKeyStore(kyberPreKeyStore, context) { ffiKyberPreKeyStore in
-                            try invokeFnReturningData {
-                                signal_decrypt_pre_key_message(
-                                    $0,
-                                    messageHandle.const(),
-                                    addressHandle.const(),
-                                    ffiSessionStore,
-                                    ffiIdentityStore,
-                                    ffiPreKeyStore,
-                                    ffiSignedPreKeyStore,
-                                    ffiKyberPreKeyStore
-                                )
+                            try invokeFnReturningArray {
+                                signal_decrypt_pre_key_message($0, messageHandle.const(), addressHandle.const(), ffiSessionStore, ffiIdentityStore, ffiPreKeyStore, ffiSignedPreKeyStore, ffiKyberPreKeyStore)
                             }
                         }
                     }
@@ -100,18 +80,10 @@ public func processPreKeyBundle(
     now: Date = Date(),
     context: StoreContext
 ) throws {
-    return try withAllBorrowed(bundle, address) { bundleHandle, addressHandle in
+    return try withNativeHandles(bundle, address) { bundleHandle, addressHandle in
         try withSessionStore(sessionStore, context) { ffiSessionStore in
             try withIdentityKeyStore(identityStore, context) { ffiIdentityStore in
-                try checkError(
-                    signal_process_prekey_bundle(
-                        bundleHandle.const(),
-                        addressHandle.const(),
-                        ffiSessionStore,
-                        ffiIdentityStore,
-                        UInt64(now.timeIntervalSince1970 * 1000)
-                    )
-                )
+                try checkError(signal_process_prekey_bundle(bundleHandle.const(), addressHandle.const(), ffiSessionStore, ffiIdentityStore, UInt64(now.timeIntervalSince1970 * 1000)))
             }
         }
     }
@@ -124,10 +96,14 @@ public func groupEncrypt<Bytes: ContiguousBytes>(
     store: SenderKeyStore,
     context: StoreContext
 ) throws -> CiphertextMessage {
-    return try withAllBorrowed(sender, .bytes(message), distributionId) { senderHandle, messageBuffer, distributionId in
-        try withSenderKeyStore(store, context) { ffiStore in
-            try invokeFnReturningNativeHandle {
-                signal_group_encrypt_message($0, senderHandle.const(), distributionId, messageBuffer, ffiStore)
+    return try sender.withNativeHandle { senderHandle in
+        try message.withUnsafeBorrowedBuffer { messageBuffer in
+            try withUnsafePointer(to: distributionId.uuid) { distributionId in
+                try withSenderKeyStore(store, context) { ffiStore in
+                    try invokeFnReturningNativeHandle {
+                        signal_group_encrypt_message($0, senderHandle.const(), distributionId, messageBuffer, ffiStore)
+                    }
+                }
             }
         }
     }
@@ -138,11 +114,13 @@ public func groupDecrypt<Bytes: ContiguousBytes>(
     from sender: ProtocolAddress,
     store: SenderKeyStore,
     context: StoreContext
-) throws -> Data {
-    return try withAllBorrowed(sender, .bytes(message)) { senderHandle, messageBuffer in
-        try withSenderKeyStore(store, context) { ffiStore in
-            try invokeFnReturningData {
-                signal_group_decrypt_message($0, senderHandle.const(), messageBuffer, ffiStore)
+) throws -> [UInt8] {
+    return try sender.withNativeHandle { senderHandle in
+        try message.withUnsafeBorrowedBuffer { messageBuffer in
+            try withSenderKeyStore(store, context) { ffiStore in
+                try invokeFnReturningArray {
+                    signal_group_decrypt_message($0, senderHandle.const(), messageBuffer, ffiStore)
+                }
             }
         }
     }
@@ -154,15 +132,13 @@ public func processSenderKeyDistributionMessage(
     store: SenderKeyStore,
     context: StoreContext
 ) throws {
-    return try withAllBorrowed(sender, message) { senderHandle, messageHandle in
+    return try withNativeHandles(sender, message) { senderHandle, messageHandle in
         try withSenderKeyStore(store, context) {
-            try checkError(
-                signal_process_sender_key_distribution_message(
-                    senderHandle.const(),
-                    messageHandle.const(),
-                    $0
-                )
-            )
+            try checkError(signal_process_sender_key_distribution_message(
+                senderHandle.const(),
+                messageHandle.const(),
+                $0
+            ))
         }
     }
 }

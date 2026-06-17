@@ -3,9 +3,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import XCTest
-
 @testable import LibSignalClient
+import XCTest
 
 private struct FakeHandle {
     // We're using the tuple to guarantee in-memory layout for this test.
@@ -15,10 +14,7 @@ private struct FakeHandle {
 }
 
 private class MockClonableHandleOwner: ClonableHandleOwner<OpaquePointer?> {
-    override class func cloneNativeHandle(
-        _ newHandle: inout OpaquePointer?,
-        currentHandle: OpaquePointer?
-    ) -> SignalFfiErrorRef? {
+    override class func cloneNativeHandle(_ newHandle: inout OpaquePointer?, currentHandle: OpaquePointer?) -> SignalFfiErrorRef? {
         XCTAssertFalse(UnsafePointer<Bool>(currentHandle!).pointee)
         newHandle = OpaquePointer(UnsafePointer<Bool>(currentHandle!) + 1)
         return nil
@@ -38,6 +34,28 @@ class ClonableHandleOwnerTests: XCTestCase {
         }
         XCTAssertTrue(handle.destroyed.original)
         XCTAssertFalse(handle.destroyed.clone)
+    }
+
+    func testBorrowAndForget() {
+        var handle = FakeHandle()
+        withUnsafeMutablePointer(to: &handle) {
+            var owner = MockClonableHandleOwner(borrowing: OpaquePointer($0))
+            cloneOrForgetAsNeeded(&owner)
+        }
+        XCTAssertFalse(handle.destroyed.original)
+        XCTAssertFalse(handle.destroyed.clone)
+    }
+
+    func testBorrowAndEscape() {
+        var handle = FakeHandle()
+        withUnsafeMutablePointer(to: &handle) {
+            var owner = MockClonableHandleOwner(borrowing: OpaquePointer($0))
+            let fakeEscape = Unmanaged.passRetained(owner)
+            cloneOrForgetAsNeeded(&owner)
+            fakeEscape.release()
+        }
+        XCTAssertFalse(handle.destroyed.original)
+        XCTAssertTrue(handle.destroyed.clone)
     }
 
     func testTake() {

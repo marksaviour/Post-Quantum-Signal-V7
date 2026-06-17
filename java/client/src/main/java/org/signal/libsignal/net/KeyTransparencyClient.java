@@ -11,7 +11,6 @@ import org.signal.libsignal.internal.Native;
 import org.signal.libsignal.internal.NativeHandleGuard;
 import org.signal.libsignal.internal.TokioAsyncContext;
 import org.signal.libsignal.keytrans.Store;
-import org.signal.libsignal.net.KeyTransparency.MonitorMode;
 import org.signal.libsignal.protocol.IdentityKey;
 import org.signal.libsignal.protocol.ServiceId;
 
@@ -29,19 +28,6 @@ import org.signal.libsignal.protocol.ServiceId;
  *   <li>Types implementing {@code Store} can be made thread safe
  *   <li>{@link KeyTransparencyClient} operations-completed asynchronous calls-can be serialized.
  * </ul>
- *
- * <p>Example usage:
- *
- * <pre>
- * var net = new Network(Network.Environment.STAGING, "key-transparency-example");
- * var chat = net.connectUnauthChat(new Listener()).get();
- * chat.start();
- *
- * KeyTransparencyClient client = chat.keyTransparencyClient();
- *
- * client.search(aci, identityKey, null, null, null, KT_DATA_STORE).get();
- *
- * </pre>
  */
 public class KeyTransparencyClient {
   private final TokioAsyncContext tokioAsyncContext;
@@ -72,19 +58,11 @@ public class KeyTransparencyClient {
    *
    * <ul>
    *   <li>{@link ChatServiceException} for errors related to communication with the server.
-   *       Depending on the concrete subclass, client can retry the operation. See also {@link
-   *       TimeoutException}, {@link ServerSideErrorException}, {@link UnexpectedResponseException},
-   *       {@link AppExpiredException},
-   *   <li>{@link RetryLaterException} when the client is being throttled. Wait for the specified
-   *       amount of time before making new requests.
-   *   <li>{@link NetworkException} when the network operation fails. Clients can retry the call
-   *       after a recommended period.
-   *   <li>{@link NetworkProtocolException} when a high level network protocol fails. For example,
-   *       failure to establish a websocket connection.
-   *   <li>{@link org.signal.libsignal.keytrans.KeyTransparencyException} for errors related to key
-   *       transparency logic, which includes missing required fields in the serialized data.
-   *       Retrying the search without changing any of the arguments (including the state of the
-   *       store) is unlikely to yield a different result.
+   *       Depending on the severity, the search can be retried.
+   *   <li>{@link KeyTransparencyException} for errors related to key transparency logic, which
+   *       includes missing required fields in the serialized data. Retrying the search without
+   *       changing any of the arguments (including the state of the store) is unlikely to yield a
+   *       different result.
    *   <li>{@link org.signal.libsignal.keytrans.VerificationFailedException} indicates a failure to
    *       verify the data in key transparency server response, such as an incorrect proof or a
    *       wrong signature.
@@ -124,8 +102,8 @@ public class KeyTransparencyClient {
     // requests.
     // It may result in an IllegalArgumentException.
     try (NativeHandleGuard tokioContextGuard = this.tokioAsyncContext.guard();
-        NativeHandleGuard identityKeyGuard = aciIdentityKey.getPublicKey().guard();
-        NativeHandleGuard chatConnectionGuard = new NativeHandleGuard(chatConnection); ) {
+        NativeHandleGuard identityKeyGuard = aciIdentityKey.getPublicKey().guard()) {
+      NativeHandleGuard chatConnectionGuard = new NativeHandleGuard(chatConnection);
       return Native.KeyTransparency_Search(
               tokioContextGuard.nativeHandle(),
               this.environment.value,
@@ -155,18 +133,10 @@ public class KeyTransparencyClient {
    *
    * <ul>
    *   <li>{@link ChatServiceException} for errors related to communication with the server.
-   *       Depending on the concrete subclass, client can retry the operation. See also {@link
-   *       TimeoutException}, {@link ServerSideErrorException}, {@link UnexpectedResponseException},
-   *       {@link AppExpiredException},
-   *   <li>{@link RetryLaterException} when the client is being throttled. Wait for the specified
-   *       amount of time before making new requests.
-   *   <li>{@link NetworkException} when the network operation fails. Clients can retry the call
-   *       after a recommended period.
-   *   <li>{@link NetworkProtocolException} when a high level network protocol fails. For example,
-   *       failure to establish a websocket connection.
-   *   <li>{@link org.signal.libsignal.keytrans.KeyTransparencyException} for errors related to key
-   *       transparency logic. Retrying the search without changing any of the arguments (including
-   *       the state of the store) is unlikely to yield a different result.
+   *       Depending on the severity, the request can be retried.
+   *   <li>{@link KeyTransparencyException} for the errors related to key transparency logic.
+   *       Retrying the search without changing any of the arguments (including the state of the
+   *       store) is unlikely to produce a different result.
    * </ul>
    *
    * @param store local persistent storage for key transparency related data, such as the latest
@@ -203,13 +173,9 @@ public class KeyTransparencyClient {
    * call. Another way of putting this is: monitor cannot be called before {@link #search}.
    *
    * <p>If any of the monitored fields in the server response contain a version that is higher than
-   * the one currently in the store, the behavior depends on the mode parameter value.
-   *
-   * <ul>
-   *   <li>{@code MonitorMode.SELF} - An exception will be thrown, no search request will be issued.
-   *   <li>{@code MonitorMode.OTHER} - A search request will be performed automatically and, if it
-   *       succeeds, the updated account data will be stored.
-   * </ul>
+   * the one currently in the store, a search request will be performed automatically and, if it
+   * succeeds, the updated account data will be stored. Otherwise, if the monitor does not detect
+   * any new versions, a search request will not be triggered.
    *
    * <p>If the latest distinguished tree head is not present in the store, it will be requested from
    * the server prior to performing the search via {@link #updateDistinguished}.
@@ -221,25 +187,16 @@ public class KeyTransparencyClient {
    *
    * <ul>
    *   <li>{@link ChatServiceException} for errors related to communication with the server.
-   *       Depending on the concrete subclass, client can retry the operation. See also {@link
-   *       TimeoutException}, {@link ServerSideErrorException}, {@link UnexpectedResponseException},
-   *       {@link AppExpiredException},
-   *   <li>{@link RetryLaterException} when the client is being throttled. Wait for the specified
-   *       amount of time before making new requests.
-   *   <li>{@link NetworkException} when the network operation fails. Clients can retry the call
-   *       after a recommended period.
-   *   <li>{@link NetworkProtocolException} when a high level network protocol fails. For example,
-   *       failure to establish a websocket connection.
-   *   <li>{@link org.signal.libsignal.keytrans.KeyTransparencyException} for errors related to key
-   *       transparency logic, which includes missing required fields in the serialized data.
-   *       Retrying the search without changing any of the arguments (including the state of the
-   *       store) is unlikely to yield a different result.
+   *       Depending on the severity, the search can be retried.
+   *   <li>{@link KeyTransparencyException} for errors related to key transparency logic, which
+   *       includes missing required fields in the serialized data. Retrying the search without
+   *       changing any of the arguments (including the state of the store) is unlikely to yield a
+   *       different result.
    *   <li>{@link org.signal.libsignal.keytrans.VerificationFailedException} indicates a failure to
    *       verify the data in key transparency server response, such as an incorrect proof or a
    *       wrong signature.
    * </ul>
    *
-   * @param mode Mode of the monitor operation. See {@link MonitorMode}.
    * @param aci the ACI of the account to be searched for. Required.
    * @param aciIdentityKey {@link IdentityKey} associated with the ACI. Required.
    * @param e164 string representation of an E.164 number associated with the account. Optional.
@@ -256,8 +213,7 @@ public class KeyTransparencyClient {
    * @throws IllegalArgumentException if the store contains corrupted data.
    */
   public CompletableFuture<Void> monitor(
-      /* @NotNull */ final MonitorMode mode,
-      final ServiceId.Aci aci,
+      /* @NotNull */ final ServiceId.Aci aci,
       /* @NotNull */ final IdentityKey aciIdentityKey,
       final String e164,
       final byte[] unidentifiedAccessKey,
@@ -269,7 +225,7 @@ public class KeyTransparencyClient {
           .thenCompose(
               (ignored) ->
                   this.monitor(
-                      mode, aci, aciIdentityKey, e164, unidentifiedAccessKey, usernameHash, store));
+                      aci, aciIdentityKey, e164, unidentifiedAccessKey, usernameHash, store));
     }
     try (NativeHandleGuard tokioContextGuard = this.tokioAsyncContext.guard();
         NativeHandleGuard identityKeyGuard = aciIdentityKey.getPublicKey().guard();
@@ -286,8 +242,7 @@ public class KeyTransparencyClient {
               // Technically this is a required parameter, but passing null
               // to generate the error on the Rust side.
               store.getAccountData(aci).orElse(null),
-              lastDistinguishedTreeHead.get(),
-              mode == MonitorMode.SELF)
+              lastDistinguishedTreeHead.get())
           .thenApply(
               (updatedAccountData) -> {
                 store.setAccountData(aci, updatedAccountData);

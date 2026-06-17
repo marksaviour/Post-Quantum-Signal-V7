@@ -10,7 +10,7 @@ use boring_signal::pkey::Public;
 use boring_signal::stack::{Stack, Stackable};
 use boring_signal::x509::crl::X509CRLRef;
 use boring_signal::x509::store::X509StoreRef;
-use boring_signal::x509::{X509, X509StoreContext, X509VerifyError};
+use boring_signal::x509::{X509StoreContext, X509};
 
 use crate::error::ContextError;
 use crate::expireable::Expireable;
@@ -75,17 +75,17 @@ impl CertChain {
         let cert_stack = Self::stack(self.certs.iter().cloned())
             .map_err(|e| Error::from(e).context("cert stack"))?;
         let mut ctx = X509StoreContext::new().expect("can allocate a fresh X509StoreContext");
-
-        let verify_result = ctx
+        let verified = ctx
             .init(trust, self.leaf(), &cert_stack, |c| {
-                c.verify_cert_with_crls(crl_stack)?;
-                Ok(c.verify_result())
+                c.verify_cert_with_crls(crl_stack)
             })
-            .unwrap_or(Err(X509VerifyError::UNSPECIFIED));
-
-        if let Err(e) = verify_result {
+            .unwrap_or(false);
+        if !verified {
             #[cfg(not(fuzzing))]
-            return Err(Error::new(format!("invalid certificate: {e:?}")));
+            return Err(Error::new(format!(
+                "invalid certificate: {:?}",
+                ctx.verify_result().unwrap_err()
+            )));
         }
 
         Ok(())
@@ -136,9 +136,13 @@ impl CertChain {
 
 impl Expireable for CertChain {
     fn valid_at(&self, timestamp: SystemTime) -> bool {
-        let Ok(asn1_timestamp) = crate::util::system_time_to_asn1_time(timestamp) else {
+        let asn1_timestamp = crate::util::system_time_to_asn1_time(timestamp);
+
+        if asn1_timestamp.is_err() {
             return false;
-        };
+        }
+
+        let asn1_timestamp = asn1_timestamp.unwrap();
 
         self.certs.iter().all(|cert| -> bool {
             cert.not_before()
@@ -165,9 +169,9 @@ pub mod testutil {
     use boring_signal::hash::MessageDigest;
     use boring_signal::nid::Nid;
     use boring_signal::pkey::{PKey, Private};
-    use boring_signal::x509::crl::{X509CRL, X509CRLBuilder, X509Revoked};
+    use boring_signal::x509::crl::{X509CRLBuilder, X509Revoked, X509CRL};
     use boring_signal::x509::extension::BasicConstraints;
-    use boring_signal::x509::{X509, X509Name};
+    use boring_signal::x509::{X509Name, X509};
 
     use super::CertChain;
 
@@ -216,7 +220,7 @@ pub mod testutil {
 
             let mut builder = X509::builder().unwrap();
             let basic_constraints = BasicConstraints::new().critical().ca().build().unwrap();
-            builder.append_extension(&basic_constraints).unwrap();
+            builder.append_extension(basic_constraints).unwrap();
 
             builder.set_version(2).unwrap();
             builder.set_subject_name(&name).unwrap();
@@ -307,9 +311,9 @@ pub mod testutil {
 mod test {
     use assert_matches::assert_matches;
     use boring_signal::nid::Nid;
-    use boring_signal::x509::X509Ref;
     use boring_signal::x509::store::{X509Store, X509StoreBuilder};
     use boring_signal::x509::verify::X509VerifyFlags;
+    use boring_signal::x509::X509Ref;
 
     use super::testutil::*;
     use super::*;
@@ -387,7 +391,7 @@ mod test {
             );
             store_bldr.add_crl(crl.to_owned()).unwrap();
         }
-        store_bldr.add_cert(root).unwrap();
+        store_bldr.add_cert(root.to_owned()).unwrap();
         store_bldr.build()
     }
 
@@ -418,11 +422,9 @@ mod test {
         let cert_chain = CertChain {
             certs: c.into_iter().map(|p| p.x509).collect(),
         };
-        assert!(
-            cert_chain
-                .validate_chain(&trust, &[&intermediate_crl])
-                .is_err()
-        )
+        assert!(cert_chain
+            .validate_chain(&trust, &[&intermediate_crl])
+            .is_err())
     }
 
     #[test]
@@ -434,11 +436,9 @@ mod test {
         let cert_chain = CertChain {
             certs: c.into_iter().map(|p| p.x509).collect(),
         };
-        assert!(
-            cert_chain
-                .validate_chain(&trust, &[&intermediate_crl])
-                .is_err()
-        )
+        assert!(cert_chain
+            .validate_chain(&trust, &[&intermediate_crl])
+            .is_err())
     }
 
     #[test]

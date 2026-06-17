@@ -3,13 +3,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-use libsignal_account_keys::{
-    AccountEntropyPool, BACKUP_FORWARD_SECRECY_TOKEN_LEN, BACKUP_KEY_LEN,
-    BackupForwardSecrecyToken, BackupId, BackupKey,
-};
+use libsignal_account_keys::{AccountEntropyPool, BackupId, BackupKey, BACKUP_KEY_LEN};
 use libsignal_message_backup::frame::ValidationError as FrameValidationError;
 use libsignal_message_backup::key::MessageBackupKey as MessageBackupKeyInner;
-use libsignal_message_backup::{Error, FoundUnknownField, backup};
+use libsignal_message_backup::parse::ParseError;
+use libsignal_message_backup::{backup, Error, FoundUnknownField};
 use libsignal_protocol::Aci;
 
 use crate::*;
@@ -17,20 +15,10 @@ use crate::*;
 pub struct MessageBackupKey(pub MessageBackupKeyInner);
 
 impl MessageBackupKey {
-    pub fn from_account_entropy_pool(
-        account_entropy: &AccountEntropyPool,
-        aci: Aci,
-        forward_secrecy_token: Option<&[u8; BACKUP_FORWARD_SECRECY_TOKEN_LEN]>,
-    ) -> Self {
+    pub fn from_account_entropy_pool(account_entropy: &AccountEntropyPool, aci: Aci) -> Self {
         let backup_key = BackupKey::derive_from_account_entropy_pool(account_entropy);
         let backup_id = backup_key.derive_backup_id(&aci);
-        let forward_secrecy_token =
-            forward_secrecy_token.map(|bytes| BackupForwardSecrecyToken(*bytes));
-        Self(MessageBackupKeyInner::derive(
-            &backup_key,
-            &backup_id,
-            forward_secrecy_token.as_ref(),
-        ))
+        Self(MessageBackupKeyInner::derive(&backup_key, &backup_id))
     }
 
     /// Used when reading from a local backup, where we might not have the ACI.
@@ -41,18 +29,11 @@ impl MessageBackupKey {
     pub fn from_backup_key_and_backup_id(
         backup_key: &[u8; BACKUP_KEY_LEN],
         backup_id: &[u8; BackupId::LEN],
-        forward_secrecy_token: Option<&[u8; BACKUP_FORWARD_SECRECY_TOKEN_LEN]>,
     ) -> Self {
         // The explicit type forces the latest version of the key derivation scheme.
         let backup_key: BackupKey = BackupKey(*backup_key);
         let backup_id = BackupId(*backup_id);
-        let forward_secrecy_token =
-            forward_secrecy_token.map(|bytes| BackupForwardSecrecyToken(*bytes));
-        Self(MessageBackupKeyInner::derive(
-            &backup_key,
-            &backup_id,
-            forward_secrecy_token.as_ref(),
-        ))
+        Self(MessageBackupKeyInner::derive(&backup_key, &backup_id))
     }
 
     pub fn from_parts(
@@ -76,10 +57,11 @@ impl From<Error> for MessageBackupValidationError {
         match value {
             Error::BackupValidation(e) => Self::String(e.to_string()),
             Error::BackupCompletion(e) => Self::String(e.to_string()),
-            Error::Parse(e) => Self::Io(e),
-            e @ Error::NoFrames | e @ Error::InvalidProtobuf(_) | e @ Error::HmacMismatch(_) => {
-                Self::String(e.to_string())
-            }
+            Error::Parse(ParseError::Io(e)) => Self::Io(e),
+            e @ Error::NoFrames
+            | e @ Error::InvalidProtobuf(_)
+            | e @ Error::HmacMismatch(_)
+            | e @ Error::Parse(ParseError::Decode(_)) => Self::String(e.to_string()),
         }
     }
 }
@@ -88,10 +70,9 @@ impl From<FrameValidationError> for MessageBackupValidationError {
     fn from(value: FrameValidationError) -> Self {
         match value {
             FrameValidationError::Io(e) => Self::Io(e),
-            e @ (FrameValidationError::MissingMetadataField(_)
-            | FrameValidationError::InvalidLength { .. }
-            | FrameValidationError::TooManyForwardSecrecyPairs(_)
-            | FrameValidationError::InvalidHmac(_)) => Self::String(e.to_string()),
+            e @ (FrameValidationError::TooShort | FrameValidationError::InvalidHmac(_)) => {
+                Self::String(e.to_string())
+            }
         }
     }
 }
@@ -102,48 +83,13 @@ pub struct MessageBackupValidationOutcome {
 }
 bridge_as_handle!(MessageBackupValidationOutcome, jni = false, node = false);
 
-pub struct BackupJsonExporter {
-    inner: libsignal_message_backup::json::exporter::JsonExporter,
-    initial_chunk: String,
+pub struct ComparableBackup {
+    pub backup: backup::serialize::Backup,
+    pub found_unknown_fields: Vec<FoundUnknownField>,
 }
 
-pub struct JsonFrameExportResult {
-    pub line: Option<String>,
-    pub validation_error: Option<libsignal_message_backup::Error>,
-}
+bridge_as_handle!(ComparableBackup);
 
-impl From<libsignal_message_backup::json::exporter::FrameExportResult> for JsonFrameExportResult {
-    fn from(value: libsignal_message_backup::json::exporter::FrameExportResult) -> Self {
-        Self {
-            line: value.line,
-            validation_error: value.validation_error,
-        }
-    }
-}
-
-impl BackupJsonExporter {
-    pub fn new(
-        inner: libsignal_message_backup::json::exporter::JsonExporter,
-        initial_chunk: String,
-    ) -> Self {
-        Self {
-            inner,
-            initial_chunk,
-        }
-    }
-
-    pub fn inner_mut(&mut self) -> &mut libsignal_message_backup::json::exporter::JsonExporter {
-        &mut self.inner
-    }
-
-    pub fn initial_chunk(&self) -> String {
-        self.initial_chunk.clone()
-    }
-}
-
-bridge_as_handle!(BackupJsonExporter, mut = true, ffi = false, jni = false);
-impl std::panic::RefUnwindSafe for BackupJsonExporter {}
-static_assertions::assert_impl_all!(BackupJsonExporter: std::panic::UnwindSafe);
 pub struct OnlineBackupValidator {
     backup: Option<backup::PartialBackup<backup::ValidateOnly>>,
 }

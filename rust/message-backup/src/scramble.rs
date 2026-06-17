@@ -181,12 +181,10 @@ impl Visit<Scrambler> for proto::BackupInfo {
             mediaRootBackupKey,
             currentAppVersion: _,
             firstAppVersion: _,
-            debugInfo,
             special_fields: _,
         } = self;
 
         mediaRootBackupKey.randomize(&mut visitor.rng);
-        debugInfo.randomize(&mut visitor.rng);
     }
 }
 
@@ -226,11 +224,6 @@ impl Visit<Scrambler> for proto::AccountData {
             accountSettings,
             backupsSubscriberData,
             svrPin,
-            bioText,
-            bioEmoji,
-            keyTransparencyData,
-            androidSpecificSettings: _,
-            iosSpecificSettings: _,
             special_fields: _,
         } = self;
 
@@ -248,11 +241,6 @@ impl Visit<Scrambler> for proto::AccountData {
         accountSettings.accept(visitor);
         backupsSubscriberData.accept(visitor);
         svrPin.randomize(&mut visitor.rng);
-        bioText.randomize(&mut visitor.rng);
-        if !bioEmoji.is_empty() {
-            *bioEmoji = REPLACEMENT_EMOJI.to_string();
-        }
-        keyTransparencyData.randomize(&mut visitor.rng);
     }
 }
 
@@ -305,15 +293,6 @@ impl Visit<Scrambler> for proto::account_data::AccountSettings {
             defaultChatStyle,
             customChatColors,
             optimizeOnDeviceStorage: _,
-            backupTier: _,
-            appTheme: _,
-            callsUseLessDataSetting: _,
-            defaultSentMediaQuality: _,
-            autoDownloadSettings: _,
-            screenLockTimeoutMinutes: _,
-            pinReminders: _,
-            allowSealedSenderFromAnyone: _,
-            allowAutomaticKeyVerification: _,
             special_fields: _,
         } = self;
 
@@ -361,6 +340,7 @@ impl Visit<Scrambler> for proto::FilePointer {
             height: _,
             caption,
             blurHash,
+            locator,
             locatorInfo,
             special_fields: _,
         } = self;
@@ -371,9 +351,91 @@ impl Visit<Scrambler> for proto::FilePointer {
         caption.randomize(&mut visitor.rng);
         blurHash.randomize(&mut visitor.rng);
 
+        if let Some(loc) = locator {
+            loc.accept(visitor);
+        }
         if let Some(loc) = locatorInfo.as_mut() {
             loc.accept(visitor);
         }
+    }
+}
+
+impl Visit<Scrambler> for proto::file_pointer::Locator {
+    fn accept(&mut self, visitor: &mut Scrambler) {
+        use proto::file_pointer::Locator;
+        match self {
+            Locator::BackupLocator(loc) => loc.accept(visitor),
+            Locator::AttachmentLocator(loc) => loc.accept(visitor),
+            Locator::LocalLocator(loc) => loc.accept(visitor),
+            Locator::InvalidAttachmentLocator(loc) => loc.accept(visitor),
+        }
+    }
+}
+
+impl Visit<Scrambler> for proto::file_pointer::BackupLocator {
+    fn accept(&mut self, visitor: &mut Scrambler) {
+        let Self {
+            mediaName,
+            cdnNumber: _,
+            key,
+            digest,
+            size: _,
+            transitCdnKey,
+            transitCdnNumber: _,
+            special_fields: _,
+        } = self;
+
+        key.randomize(&mut visitor.rng);
+        digest.randomize(&mut visitor.rng);
+        let is_thumbnail = mediaName.ends_with("_thumbnail");
+        *mediaName = hex::encode(digest);
+        if is_thumbnail {
+            mediaName.push_str("_thumbnail");
+        }
+        transitCdnKey.randomize(&mut visitor.rng);
+    }
+}
+
+impl Visit<Scrambler> for proto::file_pointer::AttachmentLocator {
+    fn accept(&mut self, visitor: &mut Scrambler) {
+        let Self {
+            cdnKey,
+            cdnNumber: _,
+            uploadTimestamp: _,
+            key,
+            digest,
+            size: _,
+            special_fields: _,
+        } = self;
+        cdnKey.randomize(&mut visitor.rng);
+        key.randomize(&mut visitor.rng);
+        digest.randomize(&mut visitor.rng);
+    }
+}
+
+impl Visit<Scrambler> for proto::file_pointer::LocalLocator {
+    fn accept(&mut self, visitor: &mut Scrambler) {
+        let Self {
+            mediaName,
+            localKey,
+            remoteKey,
+            remoteDigest,
+            size: _,
+            backupCdnNumber: _,
+            transitCdnKey,
+            transitCdnNumber: _,
+            special_fields: _,
+        } = self;
+
+        localKey.randomize(&mut visitor.rng);
+        remoteKey.randomize(&mut visitor.rng);
+        remoteDigest.randomize(&mut visitor.rng);
+        let is_thumbnail = mediaName.ends_with("_thumbnail");
+        *mediaName = hex::encode(remoteDigest);
+        if is_thumbnail {
+            mediaName.push_str("_thumbnail");
+        }
+        transitCdnKey.randomize(&mut visitor.rng);
     }
 }
 
@@ -381,29 +443,32 @@ impl Visit<Scrambler> for proto::file_pointer::LocatorInfo {
     fn accept(&mut self, visitor: &mut Scrambler) {
         let Self {
             key,
-            integrityCheck,
+            digest,
             size: _,
             transitCdnKey,
             transitCdnNumber: _,
             transitTierUploadTimestamp: _,
             mediaTierCdnNumber: _,
+            mediaName,
             localKey,
             special_fields: _,
         } = self;
 
         localKey.randomize(&mut visitor.rng);
         key.randomize(&mut visitor.rng);
-
-        // Randomize the integrity check while preserving the type
-        if let Some(check) = integrityCheck {
-            use proto::file_pointer::locator_info::IntegrityCheck;
-            match check {
-                IntegrityCheck::EncryptedDigest(digest) => digest.randomize(&mut visitor.rng),
-                IntegrityCheck::PlaintextHash(hash) => hash.randomize(&mut visitor.rng),
-            }
+        digest.randomize(&mut visitor.rng);
+        let is_thumbnail = mediaName.ends_with("_thumbnail");
+        *mediaName = hex::encode(digest);
+        if is_thumbnail {
+            mediaName.push_str("_thumbnail");
         }
-
         transitCdnKey.randomize(&mut visitor.rng);
+    }
+}
+
+impl Visit<Scrambler> for proto::file_pointer::InvalidAttachmentLocator {
+    fn accept(&mut self, _visitor: &mut Scrambler) {
+        let Self { special_fields: _ } = self;
     }
 }
 
@@ -485,7 +550,6 @@ impl Visit<Scrambler> for proto::Contact {
             hideStory: _,
             identityKey,
             identityState: _,
-            keyTransparencyData,
             registration,
             nickname,
             systemGivenName,
@@ -535,7 +599,6 @@ impl Visit<Scrambler> for proto::Contact {
         systemFamilyName.randomize(&mut visitor.rng);
         systemNickname.randomize(&mut visitor.rng);
         note.randomize(&mut visitor.rng);
-        keyTransparencyData.randomize(&mut visitor.rng);
     }
 }
 
@@ -650,20 +713,12 @@ impl Visit<Scrambler> for proto::group::AccessControl {
 impl Visit<Scrambler> for proto::group::Member {
     fn accept(&mut self, visitor: &mut Scrambler) {
         let Self {
-            user_id,
+            userId,
             role: _,
             joinedAtVersion: _,
-            label_emoji,
-            label_string,
             special_fields: _,
         } = self;
-        visitor.replace_service_id(user_id);
-        if !label_emoji.is_empty() {
-            *label_emoji = REPLACEMENT_EMOJI.to_string();
-        }
-        if !label_string.is_empty() {
-            label_string.randomize(&mut visitor.rng);
-        }
+        visitor.replace_service_id(userId);
     }
 }
 
@@ -683,22 +738,22 @@ impl Visit<Scrambler> for proto::group::MemberPendingProfileKey {
 impl Visit<Scrambler> for proto::group::MemberPendingAdminApproval {
     fn accept(&mut self, visitor: &mut Scrambler) {
         let Self {
-            user_id,
+            userId,
             timestamp: _,
             special_fields: _,
         } = self;
-        visitor.replace_service_id(user_id);
+        visitor.replace_service_id(userId);
     }
 }
 
 impl Visit<Scrambler> for proto::group::MemberBanned {
     fn accept(&mut self, visitor: &mut Scrambler) {
         let Self {
-            user_id,
+            userId,
             timestamp: _,
             special_fields: _,
         } = self;
-        visitor.replace_service_id(user_id);
+        visitor.replace_service_id(userId);
     }
 }
 
@@ -797,17 +852,12 @@ impl Visit<Scrambler> for proto::ChatItem {
             expiresInMs: _,
             revisions,
             sms: _,
-            pinDetails,
             directionalDetails,
             item,
             special_fields: _,
         } = self;
 
         revisions.accept(visitor);
-
-        if let Some(pin_details) = pinDetails.as_mut() {
-            pin_details.accept(visitor);
-        }
 
         if let Some(details) = directionalDetails {
             use proto::chat_item::DirectionalDetails;
@@ -830,8 +880,6 @@ impl Visit<Scrambler> for proto::ChatItem {
                 Item::GiftBadge(item) => item.accept(visitor),
                 Item::ViewOnceMessage(item) => item.accept(visitor),
                 Item::DirectStoryReplyMessage(item) => item.accept(visitor),
-                Item::Poll(item) => item.accept(visitor),
-                Item::AdminDeletedMessage(item) => item.accept(visitor),
             }
         }
     }
@@ -853,7 +901,6 @@ impl Visit<Scrambler> for proto::chat_item::OutgoingMessageDetails {
     fn accept(&mut self, visitor: &mut Scrambler) {
         let Self {
             sendStatus,
-            dateReceived: _,
             special_fields: _,
         } = self;
         sendStatus.accept(visitor);
@@ -1267,8 +1314,6 @@ impl Visit<Scrambler> for proto::ChatUpdateMessage {
                 Update::IndividualCall(update) => update.accept(visitor),
                 Update::GroupCall(update) => update.accept(visitor),
                 Update::LearnedProfileChange(update) => update.accept(visitor),
-                Update::PollTerminate(update) => update.accept(visitor),
-                Update::PinMessage(update) => update.accept(visitor),
             }
         }
     }
@@ -2093,84 +2138,5 @@ impl Visit<Scrambler> for proto::ChatFolder {
 
         name.randomize(&mut visitor.rng);
         id.randomize(&mut visitor.rng);
-    }
-}
-
-impl Visit<Scrambler> for proto::poll::poll_option::PollVote {
-    fn accept(&mut self, visitor: &mut Scrambler) {
-        let Self {
-            voterId: _,
-            voteCount,
-            special_fields: _,
-        } = self;
-        voteCount.randomize(&mut visitor.rng);
-    }
-}
-
-impl Visit<Scrambler> for proto::poll::PollOption {
-    fn accept(&mut self, visitor: &mut Scrambler) {
-        let Self {
-            option,
-            votes,
-            special_fields: _,
-        } = self;
-        option.randomize(&mut visitor.rng);
-        votes.accept(visitor);
-    }
-}
-
-impl Visit<Scrambler> for proto::Poll {
-    fn accept(&mut self, visitor: &mut Scrambler) {
-        let Self {
-            question,
-            allowMultiple: _,
-            options,
-            hasEnded: _,
-            reactions,
-            special_fields: _,
-        } = self;
-        question.randomize(&mut visitor.rng);
-        options.accept(visitor);
-        reactions.accept(visitor);
-    }
-}
-
-impl Visit<Scrambler> for proto::PollTerminateUpdate {
-    fn accept(&mut self, visitor: &mut Scrambler) {
-        let Self {
-            targetSentTimestamp: _,
-            question,
-            special_fields: _,
-        } = self;
-        question.randomize(&mut visitor.rng);
-    }
-}
-
-impl Visit<Scrambler> for proto::PinMessageUpdate {
-    fn accept(&mut self, _visitor: &mut Scrambler) {
-        let Self {
-            targetSentTimestamp: _,
-            authorId: _,
-            special_fields: _,
-        } = self;
-    }
-}
-
-impl Visit<Scrambler> for proto::AdminDeletedMessage {
-    fn accept(&mut self, _visitor: &mut Scrambler) {
-        let Self {
-            adminId: _,
-            special_fields: _,
-        } = self;
-    }
-}
-
-impl Visit<Scrambler> for proto::chat_item::PinDetails {
-    fn accept(&mut self, _visitor: &mut Scrambler) {
-        let Self {
-            pinnedAtTimestamp: _,
-            pinExpiry: _,
-            special_fields: _,
-        } = self;
     }
 }

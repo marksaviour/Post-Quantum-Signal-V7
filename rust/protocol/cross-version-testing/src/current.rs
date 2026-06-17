@@ -7,10 +7,10 @@ use std::time::SystemTime;
 
 use futures_util::FutureExt;
 use libsignal_protocol_current::*;
-use rand::{Rng, rng};
+use rand::{rng, Rng};
 
 fn address(id: &str) -> ProtocolAddress {
-    ProtocolAddress::new(id.into(), DeviceId::new(1).unwrap())
+    ProtocolAddress::new(id.into(), 1.into())
 }
 
 pub struct LibSignalProtocolCurrent(InMemSignalProtocolStore);
@@ -58,7 +58,7 @@ impl super::LibSignalProtocolStore for LibSignalProtocolCurrent {
             .calculate_signature(&signed_pq_pre_key_public, &mut csprng)
             .expect("can sign");
 
-        let device_id: DeviceId = csprng.random();
+        let device_id: u32 = csprng.random();
         let pre_key_id: u32 = csprng.random();
         let signed_pre_key_id: u32 = csprng.random();
         let kyber_pre_key_id: u32 = csprng.random();
@@ -69,14 +69,11 @@ impl super::LibSignalProtocolStore for LibSignalProtocolCurrent {
                 .now_or_never()
                 .expect("synchronous")
                 .expect("can fetch registration id"),
-            device_id,
+            device_id.into(),
             Some((pre_key_id.into(), pre_key_pair.public_key)),
             signed_pre_key_id.into(),
             signed_pre_key_pair.public_key,
             signed_pre_key_signature.to_vec(),
-            kyber_pre_key_id.into(),
-            signed_pq_pre_key_pair.public_key.clone(),
-            signed_pq_pre_key_signature.to_vec(),
             *self
                 .0
                 .get_identity_key_pair()
@@ -85,7 +82,12 @@ impl super::LibSignalProtocolStore for LibSignalProtocolCurrent {
                 .expect("can fetch identity key")
                 .identity_key(),
         )
-        .expect("can create pre-key bundles");
+        .expect("can create pre-key bundles")
+        .with_kyber_pre_key(
+            kyber_pre_key_id.into(),
+            signed_pq_pre_key_pair.public_key.clone(),
+            signed_pq_pre_key_signature.to_vec(),
+        );
 
         self.0
             .save_pre_key(
@@ -150,7 +152,6 @@ impl super::LibSignalProtocolStore for LibSignalProtocolCurrent {
             &mut self.0.session_store,
             &mut self.0.identity_store,
             SystemTime::now(),
-            &mut rng(),
         )
         .now_or_never()
         .expect("synchronous")
@@ -176,7 +177,7 @@ impl super::LibSignalProtocolStore for LibSignalProtocolCurrent {
                 &mut self.0.session_store,
                 &mut self.0.identity_store,
                 &mut self.0.pre_key_store,
-                &self.0.signed_pre_key_store,
+                &mut self.0.signed_pre_key_store,
                 &mut self.0.kyber_pre_key_store,
                 &mut rng(),
             )
@@ -185,48 +186,5 @@ impl super::LibSignalProtocolStore for LibSignalProtocolCurrent {
             .expect("can decrypt messages"),
             _ => panic!("unexpected 1:1 message type"),
         }
-    }
-
-    fn encrypt_sealed_sender_v1(
-        &self,
-        remote: &str,
-        msg: &UnidentifiedSenderMessageContent,
-    ) -> Vec<u8> {
-        sealed_sender_encrypt_from_usmc(&address(remote), msg, &self.0, &mut rng())
-            .now_or_never()
-            .expect("synchronous")
-            .expect("can encrypt messages")
-    }
-
-    fn encrypt_sealed_sender_v2(
-        &self,
-        remote: &str,
-        msg: &UnidentifiedSenderMessageContent,
-    ) -> Vec<u8> {
-        let session = self
-            .0
-            .load_session(&address(remote))
-            .now_or_never()
-            .expect("synchronous")
-            .expect("can fetch sessions")
-            .expect("session established");
-        sealed_sender_multi_recipient_encrypt(
-            &[&address(remote)],
-            &[&session],
-            [],
-            msg,
-            &self.0,
-            &mut rng(),
-        )
-        .now_or_never()
-        .expect("synchronous")
-        .expect("can encrypt messages")
-    }
-
-    fn decrypt_sealed_sender(&self, msg: &[u8]) -> UnidentifiedSenderMessageContent {
-        sealed_sender_decrypt_to_usmc(msg, &self.0)
-            .now_or_never()
-            .expect("synchronous")
-            .expect("can decrypt messages")
     }
 }

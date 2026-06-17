@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-use std::convert::Infallible;
 use std::time::Duration;
 
 use http::uri::InvalidUri;
@@ -12,17 +11,8 @@ use libsignal_bridge_macros::{bridge_fn, bridge_io};
 use libsignal_bridge_types::net::chat::*;
 use libsignal_bridge_types::net::{ConnectionManager, TokioAsyncContext};
 use libsignal_bridge_types::support::AsType;
-use libsignal_core::ServiceId;
 use libsignal_net::auth::Auth;
-use libsignal_net::chat::{self, ConnectError, LanguageList, Response as ChatResponse, SendError};
-use libsignal_net_chat::api::RequestError;
-use libsignal_net_chat::api::messages::{
-    MultiRecipientMessageResponse, MultiRecipientSendAuthorization, MultiRecipientSendFailure,
-    UnauthenticatedChatApi as _,
-};
-use libsignal_net_chat::api::usernames::UnauthenticatedChatApi as _;
-use libsignal_protocol::Timestamp;
-use uuid::Uuid;
+use libsignal_net::chat::{self, ConnectError, Response as ChatResponse, SendError};
 
 use crate::support::*;
 use crate::*;
@@ -30,7 +20,6 @@ use crate::*;
 bridge_handle_fns!(HttpRequest, clone = false);
 bridge_handle_fns!(UnauthenticatedChatConnection, clone = false);
 bridge_handle_fns!(AuthenticatedChatConnection, clone = false);
-bridge_handle_fns!(ProvisioningChatConnection, clone = false);
 
 #[bridge_fn(ffi = false)]
 fn HttpRequest_new(
@@ -69,12 +58,12 @@ fn HttpRequest_add_header(
 
 #[bridge_fn(jni = false)]
 fn ChatConnectionInfo_local_port(connection_info: &ChatConnectionInfo) -> u16 {
-    connection_info.transport_info.local_addr.port()
+    connection_info.transport_info.local_port
 }
 
 #[bridge_fn(jni = false)]
 fn ChatConnectionInfo_ip_version(connection_info: &ChatConnectionInfo) -> u8 {
-    connection_info.transport_info.ip_version() as u8
+    connection_info.transport_info.ip_version as u8
 }
 
 #[bridge_fn(jni = false)]
@@ -85,9 +74,8 @@ fn ChatConnectionInfo_description(connection_info: &ChatConnectionInfo) -> Strin
 #[bridge_io(TokioAsyncContext)]
 async fn UnauthenticatedChatConnection_connect(
     connection_manager: &ConnectionManager,
-    languages: LanguageList,
 ) -> Result<UnauthenticatedChatConnection, ConnectError> {
-    UnauthenticatedChatConnection::connect(connection_manager, languages).await
+    UnauthenticatedChatConnection::connect(connection_manager).await
 }
 
 #[bridge_fn]
@@ -126,59 +114,6 @@ fn UnauthenticatedChatConnection_info(chat: &UnauthenticatedChatConnection) -> C
 }
 
 #[bridge_io(TokioAsyncContext)]
-async fn UnauthenticatedChatConnection_look_up_username_hash(
-    chat: &UnauthenticatedChatConnection,
-    hash: Box<[u8]>,
-) -> Result<Option<Uuid>, RequestError<Infallible>> {
-    Ok(chat
-        .as_typed(|chat| chat.look_up_username_hash(&hash))
-        .await?
-        .map(|aci| aci.into()))
-}
-
-#[bridge_io(TokioAsyncContext)]
-async fn UnauthenticatedChatConnection_look_up_username_link(
-    chat: &UnauthenticatedChatConnection,
-    uuid: Uuid,
-    entropy: Box<[u8]>,
-) -> Result<Option<(String, [u8; 32])>, RequestError<::usernames::UsernameLinkError>> {
-    let entropy = entropy[..].try_into().map_err(|_| {
-        RequestError::Other(::usernames::UsernameLinkError::InvalidEntropyDataLength)
-    })?;
-    Ok(chat
-        .as_typed(|chat| chat.look_up_username_link(uuid, &entropy))
-        .await?
-        .map(|username| {
-            // Return both the username and the hash now; we already did the work of computing the
-            // hash when validating the decrypted username.
-            (username.to_string(), username.hash())
-        }))
-}
-
-#[bridge_io(TokioAsyncContext)]
-async fn UnauthenticatedChatConnection_send_multi_recipient_message(
-    chat: &UnauthenticatedChatConnection,
-    payload: Box<[u8]>,
-    timestamp: Timestamp,
-    auth: MultiRecipientSendAuthorization,
-    online_only: bool,
-    is_urgent: bool,
-) -> Result<Vec<ServiceId>, RequestError<MultiRecipientSendFailure>> {
-    let MultiRecipientMessageResponse { unregistered_ids } = chat
-        .as_typed(|chat| {
-            chat.send_multi_recipient_message(
-                payload.into(),
-                timestamp,
-                auth,
-                online_only,
-                is_urgent,
-            )
-        })
-        .await?;
-    Ok(unregistered_ids)
-}
-
-#[bridge_io(TokioAsyncContext)]
 async fn AuthenticatedChatConnection_preconnect(
     connection_manager: &ConnectionManager,
 ) -> Result<(), ConnectError> {
@@ -191,13 +126,11 @@ async fn AuthenticatedChatConnection_connect(
     username: String,
     password: String,
     receive_stories: bool,
-    languages: LanguageList,
 ) -> Result<AuthenticatedChatConnection, ConnectError> {
     AuthenticatedChatConnection::connect(
         connection_manager,
         Auth { username, password },
         receive_stories,
-        languages,
     )
     .await
 }
@@ -252,29 +185,4 @@ fn ServerMessageAck_SendStatus(
 ) -> Result<(), SendError> {
     let sender = ack.take().expect("a message is only acked once");
     sender(status.into_inner().into())
-}
-
-#[bridge_io(TokioAsyncContext)]
-async fn ProvisioningChatConnection_connect(
-    connection_manager: &ConnectionManager,
-) -> Result<ProvisioningChatConnection, ConnectError> {
-    ProvisioningChatConnection::connect(connection_manager).await
-}
-
-#[bridge_fn]
-fn ProvisioningChatConnection_init_listener(
-    chat: &ProvisioningChatConnection,
-    listener: Box<dyn ProvisioningListener>,
-) {
-    chat.init_listener(listener)
-}
-
-#[bridge_fn(jni = false)]
-fn ProvisioningChatConnection_info(chat: &ProvisioningChatConnection) -> ChatConnectionInfo {
-    chat.info()
-}
-
-#[bridge_io(TokioAsyncContext)]
-async fn ProvisioningChatConnection_disconnect(chat: &ProvisioningChatConnection) {
-    chat.disconnect().await
 }

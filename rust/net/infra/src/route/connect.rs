@@ -5,6 +5,7 @@
 
 use std::future::Future;
 use std::net::IpAddr;
+use std::sync::Arc;
 
 use static_assertions::assert_impl_all;
 
@@ -14,6 +15,7 @@ use crate::route::{
     TlsRouteFragment, TransportRoute, WebSocketRoute, WebSocketRouteFragment,
     WebSocketServiceRoute,
 };
+use crate::ws::WebSocketConnectError;
 
 mod composed;
 pub use composed::*;
@@ -53,7 +55,7 @@ pub trait Connector<R, Inner> {
         &self,
         over: Inner,
         route: R,
-        log_tag: &str,
+        log_tag: Arc<str>,
     ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send;
 }
 
@@ -62,7 +64,7 @@ pub trait ConnectorExt<R>: Connector<R, ()> {
     fn connect(
         &self,
         route: R,
-        log_tag: &str,
+        log_tag: Arc<str>,
     ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
         self.connect_over((), route, log_tag)
     }
@@ -93,9 +95,13 @@ type DirectProxyConnector = DirectOrProxy<
     crate::tcp_ssl::proxy::StatelessProxied,
     TransportConnectError,
 >;
-type TransportConnector =
-    ComposedConnector<LoggingConnector<crate::tcp_ssl::StatelessTls>, DirectProxyConnector>;
-type WebSocketHttpConnector = ComposedConnector<crate::ws::Stateless, TransportConnector>;
+type TransportConnector = ComposedConnector<
+    LoggingConnector<crate::tcp_ssl::StatelessTls>,
+    DirectProxyConnector,
+    TransportConnectError,
+>;
+type WebSocketHttpConnector =
+    ComposedConnector<crate::ws::Stateless, TransportConnector, WebSocketConnectError>;
 
 assert_impl_all!(TcpConnector: Connector<TcpRoute<IpAddr>, ()>);
 assert_impl_all!(
@@ -114,21 +120,24 @@ assert_impl_all!(WebSocketHttpConnector: Connector<WebSocketServiceRoute, ()>);
 /// See the documentation for the `Connector` impl for [`crate::ws::Stateless`]
 /// for more about why [`WebSocketRouteFragment`] and [`HttpRouteFragment`] are
 /// treated as a single protocol level.
-impl<A, B, Inner, T> Connector<WebSocketRoute<HttpsTlsRoute<T>>, Inner> for ComposedConnector<A, B>
+impl<A, B, Inner, T, Error> Connector<WebSocketRoute<HttpsTlsRoute<T>>, Inner>
+    for ComposedConnector<A, B, Error>
 where
-    A: Connector<(WebSocketRouteFragment, HttpRouteFragment), B::Connection> + Sync,
-    B: Connector<T, Inner, Error: Into<A::Error>> + Sync,
+    A: Connector<(WebSocketRouteFragment, HttpRouteFragment), B::Connection, Error: Into<Error>>
+        + Sync,
+    B: Connector<T, Inner, Error: Into<Error>> + Sync,
     Inner: Send,
     T: Send,
 {
     type Connection = A::Connection;
-    type Error = A::Error;
+
+    type Error = Error;
 
     fn connect_over(
         &self,
         over: Inner,
         route: WebSocketRoute<HttpsTlsRoute<T>>,
-        log_tag: &str,
+        log_tag: Arc<str>,
     ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
         let WebSocketRoute {
             fragment: ws_fragment,
@@ -143,47 +152,23 @@ where
     }
 }
 
-/// Establishes an HTTPS connection over a transport stream.
-impl<A, B, Inner, T> Connector<HttpsTlsRoute<T>, Inner> for ComposedConnector<A, B>
-where
-    A: Connector<HttpRouteFragment, B::Connection> + Sync,
-    B: Connector<T, Inner, Error: Into<A::Error>> + Sync,
-    Inner: Send,
-    T: Send,
-{
-    type Connection = A::Connection;
-    type Error = A::Error;
-
-    fn connect_over(
-        &self,
-        over: Inner,
-        route: HttpsTlsRoute<T>,
-        log_tag: &str,
-    ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
-        let HttpsTlsRoute {
-            fragment: http_fragment,
-            inner: tls_route,
-        } = route;
-        self.connect_inner_then_outer(over, tls_route, http_fragment, log_tag)
-    }
-}
-
 /// Establishes a TLS connection over a transport stream.
-impl<A, B, Inner, T> Connector<TlsRoute<T>, Inner> for ComposedConnector<A, B>
+impl<A, B, Inner, T, Error> Connector<TlsRoute<T>, Inner> for ComposedConnector<A, B, Error>
 where
-    A: Connector<TlsRouteFragment, B::Connection> + Sync,
-    B: Connector<T, Inner, Error: Into<A::Error>> + Sync,
+    A: Connector<TlsRouteFragment, B::Connection, Error: Into<Error>> + Sync,
+    B: Connector<T, Inner, Error: Into<Error>> + Sync,
     Inner: Send,
     T: Send,
 {
     type Connection = A::Connection;
-    type Error = A::Error;
+
+    type Error = Error;
 
     fn connect_over(
         &self,
         over: Inner,
         route: TlsRoute<T>,
-        log_tag: &str,
+        log_tag: Arc<str>,
     ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
         let TlsRoute {
             fragment: tls_fragment,
@@ -211,7 +196,7 @@ where
         &self,
         over: Inner,
         route: TlsRoute<T>,
-        log_tag: &str,
+        log_tag: Arc<str>,
     ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
         let TlsRoute {
             fragment: tls_fragment,
@@ -230,7 +215,7 @@ impl<C: Connector<R, Inner>, R, Inner> Connector<R, Inner> for &C {
         &self,
         over: Inner,
         route: R,
-        log_tag: &str,
+        log_tag: Arc<str>,
     ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
         (*self).connect_over(over, route, log_tag)
     }
@@ -251,7 +236,7 @@ pub mod testutils {
 
     impl<R, Inner, Fut, F, C, E> Connector<R, Inner> for ConnectFn<F>
     where
-        F: for<'a> Fn(Inner, R) -> Fut,
+        F: Fn(Inner, R, Arc<str>) -> Fut,
         Fut: Future<Output = Result<C, E>> + Send,
     {
         type Connection = C;
@@ -262,9 +247,9 @@ pub mod testutils {
             &self,
             over: Inner,
             route: R,
-            _log_tag: &str,
+            log_tag: Arc<str>,
         ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
-            self.0(over, route)
+            self.0(over, route, log_tag)
         }
     }
 
@@ -299,7 +284,7 @@ pub mod testutils {
             &self,
             _transport: T,
             _route: R,
-            _log_tag: &str,
+            _log_tag: Arc<str>,
         ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
             let delay = self.delay;
             async move {

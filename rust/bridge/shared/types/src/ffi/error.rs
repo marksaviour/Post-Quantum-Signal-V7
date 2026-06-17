@@ -3,29 +3,25 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-use std::borrow::Cow;
 use std::fmt;
+use std::io::{Error as IoError, ErrorKind as IoErrorKind};
 
-use assert_matches::assert_matches;
 use attest::enclave::Error as EnclaveError;
 use attest::hsm_enclave::Error as HsmEnclaveError;
 use device_transfer::Error as DeviceTransferError;
 use libsignal_account_keys::Error as PinError;
-use libsignal_net::infra::errors::{LogSafeDisplay, TransportConnectError};
-use libsignal_net::infra::ws::WebSocketConnectError;
-use libsignal_net_chat::api::RateLimitChallenge;
-use libsignal_net_chat::api::keytrans::Error as KeyTransError;
-use libsignal_net_chat::api::messages::MismatchedDeviceError;
-use libsignal_net_chat::api::registration::{RegistrationLock, VerificationCodeNotDeliverable};
+use libsignal_net::infra::errors::RetryLater;
+use libsignal_net::keytrans::Error;
+use libsignal_net::registration::{RegistrationLock, VerificationCodeNotDeliverable};
 use libsignal_protocol::*;
 use signal_crypto::Error as SignalCryptoError;
 use usernames::{UsernameError, UsernameLinkError};
 use zkgroup::{ZkGroupDeserializationFailure, ZkGroupVerificationFailure};
 
 use super::{FutureCancelled, NullPointerError, UnexpectedPanic};
-use crate::support::{IllegalArgumentError, WithContext, describe_panic};
+use crate::support::describe_panic;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 #[repr(C)]
 pub enum SignalErrorCode {
     #[allow(dead_code)]
@@ -62,7 +58,6 @@ pub enum SignalErrorCode {
     InvalidRegistrationId = 81,
     InvalidSession = 82,
     InvalidSenderKeySession = 83,
-    InvalidProtocolAddress = 84,
 
     DuplicatedMessage = 90,
 
@@ -100,13 +95,10 @@ pub enum SignalErrorCode {
     ConnectionFailed = 148,
     ChatServiceInactive = 149,
     RequestTimedOut = 150,
-    RateLimitChallenge = 151,
-    PossibleCaptiveNetwork = 152,
 
     SvrDataMissing = 160,
     SvrRestoreFailed = 161,
     SvrRotationMachineTooManySteps = 162,
-    SvrRequestFailed = 163,
 
     AppExpired = 170,
     DeviceDeregistered = 171,
@@ -116,6 +108,7 @@ pub enum SignalErrorCode {
     BackupValidation = 180,
 
     RegistrationInvalidSessionId = 190,
+    RegistrationRequestNotValid = 191,
     RegistrationUnknown = 192,
     RegistrationSessionNotFound = 193,
     RegistrationNotReadyForVerification = 194,
@@ -129,9 +122,6 @@ pub enum SignalErrorCode {
 
     KeyTransparencyError = 210,
     KeyTransparencyVerificationFailed = 211,
-
-    RequestUnauthorized = 220,
-    MismatchedDevices = 221,
 }
 
 pub trait UpcastAsAny {
@@ -146,29 +136,14 @@ impl<T: std::any::Any> UpcastAsAny for T {
 /// Error returned when asking for an attribute of an error that doesn't support that attribute.
 pub struct WrongErrorKind;
 
-pub struct FingerprintVersions {
-    pub theirs: u32,
-    pub ours: u32,
-}
-
-/// A trait for *bridged* error representations specifically.
-///
-/// This should be used for any errors that need to provide additional properties *themselves,* but
-/// if they merely delegate to another error, or have no additional properties at all, prefer
-/// implementing [`IntoFfiError`] instead, using [`SimpleError`] for the cases that don't need
-/// special handling.
-#[allow(rustdoc::private_intra_doc_links)]
 pub trait FfiError: UpcastAsAny + fmt::Debug + Send + 'static {
-    fn describe(&self) -> Cow<'_, str>;
+    fn describe(&self) -> String;
     fn code(&self) -> SignalErrorCode;
 
     fn provide_address(&self) -> Result<ProtocolAddress, WrongErrorKind> {
         Err(WrongErrorKind)
     }
     fn provide_uuid(&self) -> Result<uuid::Uuid, WrongErrorKind> {
-        Err(WrongErrorKind)
-    }
-    fn provide_invalid_address(&self) -> Result<(&str, u32), WrongErrorKind> {
         Err(WrongErrorKind)
     }
     fn provide_retry_after_seconds(&self) -> Result<u32, WrongErrorKind> {
@@ -188,41 +163,6 @@ pub trait FfiError: UpcastAsAny + fmt::Debug + Send + 'static {
     fn provide_registration_lock(&self) -> Result<&RegistrationLock, WrongErrorKind> {
         Err(WrongErrorKind)
     }
-    fn provide_rate_limit_challenge(&self) -> Result<&RateLimitChallenge, WrongErrorKind> {
-        Err(WrongErrorKind)
-    }
-    fn provide_fingerprint_versions(&self) -> Result<FingerprintVersions, WrongErrorKind> {
-        Err(WrongErrorKind)
-    }
-    fn provide_mismatched_device_errors(&self) -> Result<&[MismatchedDeviceError], WrongErrorKind> {
-        Err(WrongErrorKind)
-    }
-}
-
-/// An [`FfiError`] that only has a code and message.
-#[derive(Debug)]
-struct SimpleError {
-    code: SignalErrorCode,
-    message: Cow<'static, str>,
-}
-
-impl FfiError for SimpleError {
-    fn describe(&self) -> Cow<'_, str> {
-        Cow::Borrowed(&self.message)
-    }
-
-    fn code(&self) -> SignalErrorCode {
-        self.code
-    }
-}
-
-impl SimpleError {
-    fn new(code: SignalErrorCode, message: impl Into<Cow<'static, str>>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-        }
-    }
 }
 
 /// The top-level error type (opaquely) returned to C clients when something goes wrong.
@@ -237,11 +177,6 @@ pub struct SignalFfiError(Box<dyn FfiError + Send>);
 impl SignalFfiError {
     pub fn downcast_ref<T: FfiError>(&self) -> Option<&T> {
         (*self.0).upcast_as_any().downcast_ref()
-    }
-
-    #[cold]
-    pub fn into_raw_box_for_ffi(self) -> *mut Self {
-        Box::into_raw(Box::new(self))
     }
 }
 
@@ -262,142 +197,43 @@ impl fmt::Display for SignalFfiError {
     }
 }
 
-/// A slightly more convenient version of `From`/`Into` for [`SignalFfiError`].
-///
-/// We have a lot of errors, so the convenience is worth it. The main improvement is that the return
-/// type only has to make it to the `FfiError` state.
-pub trait IntoFfiError {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError>;
-}
-
-impl<T: FfiError> IntoFfiError for T {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        SignalFfiError(Box::new(self))
-    }
-}
-
-impl FfiError for std::convert::Infallible {
-    fn describe(&self) -> Cow<'_, str> {
-        match *self {}
-    }
-
-    fn code(&self) -> SignalErrorCode {
-        match *self {}
-    }
-}
-
-impl<T: IntoFfiError> From<T> for SignalFfiError {
-    fn from(value: T) -> Self {
-        value.into_ffi_error().into()
-    }
-}
-
-impl IntoFfiError for IllegalArgumentError {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        SimpleError::new(SignalErrorCode::InvalidArgument, self.0)
-    }
-}
-
-#[derive(Debug)]
-struct InvalidRegistrationId {
-    peer_addr: ProtocolAddress,
-    invalid_id: u32,
-}
-
-impl FfiError for InvalidRegistrationId {
-    fn describe(&self) -> Cow<'_, str> {
-        format!(
-            "session for {} has invalid registration ID {:X}",
-            self.peer_addr, self.invalid_id
-        )
-        .into()
-    }
-
-    fn code(&self) -> SignalErrorCode {
-        SignalErrorCode::InvalidRegistrationId
-    }
-
-    fn provide_address(&self) -> Result<ProtocolAddress, WrongErrorKind> {
-        Ok(self.peer_addr.clone())
-    }
-}
-
-#[derive(Debug)]
-struct InvalidSenderKeySession {
-    distribution_id: uuid::Uuid,
-}
-
-impl FfiError for InvalidSenderKeySession {
-    fn describe(&self) -> Cow<'_, str> {
-        format!(
-            "invalid sender key session with distribution ID {}",
-            self.distribution_id
-        )
-        .into()
-    }
-
-    fn code(&self) -> SignalErrorCode {
-        SignalErrorCode::InvalidSenderKeySession
-    }
-
-    fn provide_uuid(&self) -> Result<uuid::Uuid, WrongErrorKind> {
-        Ok(self.distribution_id)
-    }
-}
-
-#[derive(Debug)]
-struct InvalidProtocolAddress {
-    name: String,
-    device_id: u32,
-}
-
-impl FfiError for InvalidProtocolAddress {
-    fn describe(&self) -> Cow<'_, str> {
-        format!(
-            "protocol address is invalid: {}.{}",
-            self.name, self.device_id,
-        )
-        .into()
-    }
-
-    fn code(&self) -> SignalErrorCode {
-        SignalErrorCode::InvalidProtocolAddress
-    }
-
-    fn provide_invalid_address(&self) -> Result<(&str, u32), WrongErrorKind> {
-        Ok((&self.name, self.device_id))
-    }
-}
-
-impl IntoFfiError for SignalProtocolError {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        let code = match &self {
-            &Self::InvalidSenderKeySession { distribution_id } => {
-                return SignalFfiError::from(InvalidSenderKeySession { distribution_id });
+impl<T: FfiError> From<T> for SignalFfiError {
+    fn from(mut value: T) -> Self {
+        // Special case: if the error being boxed is an IoError containing a SignalProtocolError,
+        // extract the SignalProtocolError up front.
+        match (&mut value as &mut dyn std::any::Any).downcast_mut::<IoError>() {
+            Some(e) => {
+                let original_error = (e.kind() == IoErrorKind::Other)
+                    .then(|| {
+                        e.get_mut()
+                            .and_then(|e| e.downcast_mut::<SignalProtocolError>())
+                    })
+                    .flatten()
+                    .map(|e| {
+                        // We can't get the inner error out without putting something in
+                        // its place, so leave some random (cheap-to-construct) error.
+                        // TODO: use IoError::downcast() once it is stabilized
+                        // (https://github.com/rust-lang/rust/issues/99262).
+                        std::mem::replace(e, SignalProtocolError::InvalidPreKeyId)
+                    });
+                if let Some(original_error) = original_error {
+                    Self(Box::new(original_error))
+                } else {
+                    Self(Box::new(value))
+                }
             }
-            Self::InvalidRegistrationId(_, _) => {
-                // Re-match as owned.
-                return assert_matches!(
-                    self,
-                    Self::InvalidRegistrationId(peer_addr, invalid_id) =>
-                    InvalidRegistrationId {
-                        peer_addr, invalid_id
-                    }
-                )
-                .into();
-            }
-            Self::InvalidProtocolAddress { .. } => {
-                // Re-match as owned.
-                return assert_matches!(
-                    self,
-                    Self::InvalidProtocolAddress { name, device_id } =>
-                    InvalidProtocolAddress {
-                        name, device_id
-                    }
-                )
-                .into();
-            }
+            None => Self(Box::new(value)),
+        }
+    }
+}
 
+impl FfiError for SignalProtocolError {
+    fn describe(&self) -> String {
+        self.to_string()
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        match self {
             Self::InvalidArgument(_) => SignalErrorCode::InvalidArgument,
             Self::InvalidState(_, _) => SignalErrorCode::InvalidState,
             Self::InvalidProtobufEncoding => SignalErrorCode::ProtobufError,
@@ -410,10 +246,11 @@ impl IntoFfiError for SignalProtocolError {
             Self::UnrecognizedMessageVersion(_) | Self::UnknownSealedSenderVersion(_) => {
                 SignalErrorCode::UnrecognizedMessageVersion
             }
+            Self::FingerprintVersionMismatch(_, _) => SignalErrorCode::FingerprintVersionMismatch,
+            Self::FingerprintParsingError => SignalErrorCode::FingerprintParsingError,
             Self::NoKeyTypeIdentifier
             | Self::BadKeyType(_)
             | Self::BadKeyLength(_, _)
-            | Self::InvalidKeyAgreement
             | Self::InvalidMacKeyLength(_)
             | Self::BadKEMKeyType(_)
             | Self::WrongKEMKeyType(_, _)
@@ -427,51 +264,50 @@ impl IntoFfiError for SignalProtocolError {
                 SignalErrorCode::SessionNotFound
             }
             Self::InvalidSessionStructure(_) => SignalErrorCode::InvalidSession,
+            Self::InvalidSenderKeySession { .. } => SignalErrorCode::InvalidSenderKeySession,
+            Self::InvalidRegistrationId(_, _) => SignalErrorCode::InvalidRegistrationId,
             Self::DuplicatedMessage(_, _) => SignalErrorCode::DuplicatedMessage,
             Self::FfiBindingError(_) => SignalErrorCode::InternalError,
             Self::ApplicationCallbackError(_, _) => SignalErrorCode::CallbackError,
             Self::SealedSenderSelfSend => SignalErrorCode::SealedSenderSelfSend,
-            Self::UnknownSealedSenderServerCertificateId(_) => SignalErrorCode::VerificationFailure,
-        };
-
-        SimpleError::new(code, self.to_string()).into()
-    }
-}
-
-impl FfiError for libsignal_protocol::FingerprintError {
-    fn describe(&self) -> Cow<'_, str> {
-        self.to_string().into()
-    }
-
-    fn code(&self) -> SignalErrorCode {
-        match self {
-            Self::VersionMismatch { .. } => SignalErrorCode::FingerprintVersionMismatch,
-            Self::ParsingError(_) => SignalErrorCode::FingerprintParsingError,
-            Self::InvalidIterationCount(_) => SignalErrorCode::InvalidArgument,
         }
     }
 
-    fn provide_fingerprint_versions(&self) -> Result<FingerprintVersions, WrongErrorKind> {
+    fn provide_address(&self) -> Result<ProtocolAddress, WrongErrorKind> {
         match self {
-            &Self::VersionMismatch { theirs, ours } => Ok(FingerprintVersions { theirs, ours }),
+            Self::InvalidRegistrationId(address, _id) => Ok(address.clone()),
+            _ => Err(WrongErrorKind),
+        }
+    }
+
+    fn provide_uuid(&self) -> Result<uuid::Uuid, WrongErrorKind> {
+        match self {
+            Self::InvalidSenderKeySession { distribution_id } => Ok(*distribution_id),
             _ => Err(WrongErrorKind),
         }
     }
 }
 
-impl IntoFfiError for DeviceTransferError {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        let code = match self {
+impl FfiError for DeviceTransferError {
+    fn describe(&self) -> String {
+        format!("Device transfer operation failed: {self}")
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        match self {
             Self::KeyDecodingFailed => SignalErrorCode::InvalidKey,
             Self::InternalError(_) => SignalErrorCode::InternalError,
-        };
-        SimpleError::new(code, format!("Device transfer operation failed: {self}"))
+        }
     }
 }
 
-impl IntoFfiError for HsmEnclaveError {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        let code = match self {
+impl FfiError for HsmEnclaveError {
+    fn describe(&self) -> String {
+        format!("HSM enclave operation failed: {self}")
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        match self {
             Self::HSMCommunicationError(_) | Self::HSMHandshakeError(_) => {
                 SignalErrorCode::InvalidMessage
             }
@@ -479,64 +315,83 @@ impl IntoFfiError for HsmEnclaveError {
             Self::InvalidPublicKeyError => SignalErrorCode::InvalidKey,
             Self::InvalidCodeHashError => SignalErrorCode::InvalidArgument,
             Self::InvalidBridgeStateError => SignalErrorCode::InvalidState,
-        };
-        SimpleError::new(code, format!("HSM enclave operation failed: {self}"))
+        }
     }
 }
 
-impl IntoFfiError for EnclaveError {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        let message = format!("SGX operation failed: {self}");
-        let code = match self {
+impl FfiError for EnclaveError {
+    fn describe(&self) -> String {
+        format!("SGX operation failed: {self}")
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        match self {
             Self::AttestationError(_) | Self::NoiseError(_) | Self::NoiseHandshakeError(_) => {
                 SignalErrorCode::InvalidMessage
             }
             Self::AttestationDataError { .. } => SignalErrorCode::InvalidAttestationData,
             Self::InvalidBridgeStateError => SignalErrorCode::InvalidState,
-        };
-        SimpleError::new(code, message)
+        }
     }
 }
 
-impl IntoFfiError for PinError {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        let code = match self {
+impl FfiError for PinError {
+    fn describe(&self) -> String {
+        self.to_string()
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        match self {
             Self::Argon2Error(_) | Self::DecodingError(_) | Self::MrenclaveLookupError => {
                 SignalErrorCode::InvalidArgument
             }
-        };
-        SimpleError::new(code, self.to_string())
+        }
     }
 }
 
-impl IntoFfiError for SignalCryptoError {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        let code = match self {
+impl FfiError for SignalCryptoError {
+    fn describe(&self) -> String {
+        format!("Cryptographic operation failed: {self}")
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        match self {
             Self::UnknownAlgorithm(_, _)
             | Self::InvalidKeySize
             | Self::InvalidNonceSize
             | Self::InvalidInputSize => SignalErrorCode::InvalidArgument,
             Self::InvalidTag => SignalErrorCode::InvalidMessage,
-        };
-        SimpleError::new(code, format!("Cryptographic operation failed: {self}"))
+        }
     }
 }
 
-impl IntoFfiError for ZkGroupVerificationFailure {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        SimpleError::new(SignalErrorCode::VerificationFailure, self.to_string())
+impl FfiError for ZkGroupVerificationFailure {
+    fn describe(&self) -> String {
+        self.to_string()
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        SignalErrorCode::VerificationFailure
     }
 }
 
-impl IntoFfiError for ZkGroupDeserializationFailure {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        SimpleError::new(SignalErrorCode::InvalidType, self.to_string())
+impl FfiError for ZkGroupDeserializationFailure {
+    fn describe(&self) -> String {
+        self.to_string()
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        SignalErrorCode::InvalidType
     }
 }
 
-impl IntoFfiError for UsernameError {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        let code = match self {
+impl FfiError for UsernameError {
+    fn describe(&self) -> String {
+        self.to_string()
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        match self {
             Self::MissingSeparator => SignalErrorCode::UsernameMissingSeparator,
             Self::NicknameCannotBeEmpty => SignalErrorCode::UsernameCannotBeEmpty,
             Self::NicknameCannotStartWithDigit => SignalErrorCode::UsernameCannotStartWithDigit,
@@ -553,108 +408,136 @@ impl IntoFfiError for UsernameError {
             }
             Self::BadDiscriminatorCharacter => SignalErrorCode::UsernameBadDiscriminatorCharacter,
             Self::DiscriminatorTooLarge => SignalErrorCode::UsernameDiscriminatorTooLarge,
-        };
-        SimpleError::new(code, self.to_string())
+        }
     }
 }
 
-impl IntoFfiError for usernames::ProofVerificationFailure {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        SimpleError::new(SignalErrorCode::VerificationFailure, self.to_string())
+impl FfiError for usernames::ProofVerificationFailure {
+    fn describe(&self) -> String {
+        self.to_string()
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        SignalErrorCode::VerificationFailure
     }
 }
 
-impl IntoFfiError for UsernameLinkError {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        let code = match self {
+impl FfiError for UsernameLinkError {
+    fn describe(&self) -> String {
+        self.to_string()
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        match self {
             Self::InputDataTooLong => SignalErrorCode::UsernameTooLong,
             Self::InvalidEntropyDataLength => SignalErrorCode::UsernameLinkInvalidEntropyDataLength,
             Self::UsernameLinkDataTooShort
             | Self::HmacMismatch
             | Self::BadCiphertext
             | Self::InvalidDecryptedDataStructure => SignalErrorCode::UsernameLinkInvalid,
-        };
-        SimpleError::new(code, self.to_string())
-    }
-}
-
-impl IntoFfiError for std::io::Error {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        // Special case: if the error being boxed is an IoError containing a SignalProtocolError,
-        // extract the SignalProtocolError up front.
-        match self.downcast::<SignalProtocolError>() {
-            Ok(inner) => inner.into_ffi_error().into(),
-            Err(original) => {
-                SimpleError::new(SignalErrorCode::IoError, format!("IO error: {original}")).into()
-            }
         }
     }
 }
 
-impl IntoFfiError for libsignal_net::cdsi::LookupError {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        let result: SignalFfiError = match self {
-            Self::CdsiProtocol(_) | Self::EnclaveProtocol(_) | Self::Server { .. } => {
-                SimpleError::new(
-                    SignalErrorCode::NetworkProtocol,
-                    format!("Protocol error: {self}"),
+impl FfiError for IoError {
+    fn describe(&self) -> String {
+        format!("IO error: {self}")
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        // Parallels the unwrapping that happens when converting to a boxed SignalFfiError.
+        (self.kind() == IoErrorKind::Other)
+            .then(|| {
+                Some(
+                    self.get_ref()?
+                        .downcast_ref::<SignalProtocolError>()?
+                        .code(),
                 )
-                .into()
-            }
-            Self::AttestationError(inner) => inner.into(),
-            Self::RateLimited(inner) => inner.into(),
-            Self::InvalidToken => SimpleError::new(
-                SignalErrorCode::CdsiInvalidToken,
-                "CDSI request token was invalid",
-            )
-            .into(),
-            Self::ConnectTransport(e) => {
-                SimpleError::new(SignalErrorCode::IoError, format!("IO error: {e}")).into()
-            }
-            Self::WebSocket(e) => {
-                SimpleError::new(SignalErrorCode::WebSocket, format!("WebSocket error: {e}")).into()
-            }
-            Self::AllConnectionAttemptsFailed => SimpleError::new(
-                SignalErrorCode::ConnectionFailed,
-                "No connection attempts succeeded before timeout",
-            )
-            .into(),
-            Self::InvalidArgument { .. } => SimpleError::new(
-                SignalErrorCode::InvalidArgument,
-                format!("invalid argument: {self}"),
-            )
-            .into(),
-        };
-        result
+            })
+            .flatten()
+            .unwrap_or(SignalErrorCode::IoError)
     }
 }
 
-impl IntoFfiError for libsignal_net::chat::ConnectError {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
+impl FfiError for libsignal_net::cdsi::LookupError {
+    fn describe(&self) -> String {
         match self {
-            // Special case for self-signed certs, in case the app wants to tell the user to switch
-            // networks.
-            Self::WebSocket(WebSocketConnectError::Transport(
-                ref e @ TransportConnectError::SslFailedHandshake(ref reason),
-            )) if reason.is_possible_captive_network() => {
-                SimpleError::new(SignalErrorCode::PossibleCaptiveNetwork, e.to_string()).into()
+            Self::CdsiProtocol(_)
+            | Self::EnclaveProtocol(_)
+            | Self::InvalidResponse
+            | Self::ParseError
+            | Self::Server { .. } => {
+                format!("Protocol error: {self}")
             }
-            Self::WebSocket(e) => {
-                SimpleError::new(SignalErrorCode::WebSocket, format!("WebSocket error: {e}")).into()
+            Self::AttestationError(e) => e.describe(),
+            Self::RateLimited(RetryLater {
+                retry_after_seconds,
+            }) => format!("Rate limited; try again after {retry_after_seconds}s"),
+            Self::InvalidToken => "CDSI request token was invalid".to_owned(),
+            Self::ConnectTransport(e) => format!("IO error: {e}"),
+            Self::WebSocket(e) => format!("WebSocket error: {e}"),
+            Self::ConnectionTimedOut => "Connect timed out".to_owned(),
+            Self::InvalidArgument { .. } => format!("invalid argument: {self}"),
+        }
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        match self {
+            Self::CdsiProtocol(_)
+            | Self::EnclaveProtocol(_)
+            | Self::InvalidResponse
+            | Self::ParseError
+            | Self::Server { .. } => SignalErrorCode::NetworkProtocol,
+            Self::AttestationError(e) => e.code(),
+            Self::RateLimited { .. } => SignalErrorCode::RateLimited,
+            Self::InvalidToken => SignalErrorCode::CdsiInvalidToken,
+            Self::ConnectTransport(_) => SignalErrorCode::IoError,
+            Self::WebSocket(_) => SignalErrorCode::WebSocket,
+            Self::ConnectionTimedOut => SignalErrorCode::ConnectionTimedOut,
+            Self::InvalidArgument { .. } => SignalErrorCode::InvalidArgument,
+        }
+    }
+
+    fn provide_retry_after_seconds(&self) -> Result<u32, WrongErrorKind> {
+        match self {
+            Self::RateLimited(RetryLater {
+                retry_after_seconds,
+            }) => Ok(*retry_after_seconds),
+            _ => Err(WrongErrorKind),
+        }
+    }
+}
+
+impl FfiError for libsignal_net::chat::ConnectError {
+    fn describe(&self) -> String {
+        match self {
+            Self::WebSocket(e) => format!("WebSocket error: {e}"),
+            Self::AllAttemptsFailed | Self::InvalidConnectionConfiguration => {
+                "Connection failed".to_owned()
             }
+            Self::Timeout => "Connect timed out".to_owned(),
+            Self::AppExpired => "App expired".to_owned(),
+            Self::DeviceDeregistered => "Device deregistered or delinked".to_owned(),
+            Self::RetryLater(retry_later) => retry_later.describe(),
+        }
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        match self {
+            Self::WebSocket(_) => SignalErrorCode::WebSocket,
             Self::AllAttemptsFailed { .. } | Self::InvalidConnectionConfiguration => {
-                SimpleError::new(SignalErrorCode::ConnectionFailed, "Connection failed").into()
+                SignalErrorCode::ConnectionFailed
             }
-            Self::Timeout => {
-                SimpleError::new(SignalErrorCode::ConnectionTimedOut, "Connect timed out").into()
-            }
-            Self::AppExpired => SimpleError::new(SignalErrorCode::AppExpired, "App expired").into(),
-            Self::DeviceDeregistered => SimpleError::new(
-                SignalErrorCode::DeviceDeregistered,
-                "Device deregistered or delinked",
-            )
-            .into(),
-            Self::RetryLater(retry_later) => retry_later.into_ffi_error().into(),
+            Self::Timeout => SignalErrorCode::ConnectionTimedOut,
+            Self::AppExpired => SignalErrorCode::AppExpired,
+            Self::DeviceDeregistered => SignalErrorCode::DeviceDeregistered,
+            Self::RetryLater { .. } => SignalErrorCode::RateLimited,
+        }
+    }
+    fn provide_retry_after_seconds(&self) -> Result<u32, WrongErrorKind> {
+        match self {
+            Self::RetryLater(retry_later) => retry_later.provide_retry_after_seconds(),
+            _ => Err(WrongErrorKind),
         }
     }
 }
@@ -664,381 +547,337 @@ impl FfiError for libsignal_net::infra::errors::RetryLater {
         SignalErrorCode::RateLimited
     }
 
-    fn describe(&self) -> Cow<'_, str> {
+    fn describe(&self) -> String {
         let Self {
             retry_after_seconds,
         } = self;
-        format!("Rate limited; try again after {retry_after_seconds}s").into()
+        format!("Rate limited; try again after {retry_after_seconds}s")
     }
-
     fn provide_retry_after_seconds(&self) -> Result<u32, WrongErrorKind> {
         Ok(self.retry_after_seconds)
     }
 }
 
-impl IntoFfiError for libsignal_net::chat::SendError {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
+impl FfiError for libsignal_net::chat::SendError {
+    fn describe(&self) -> String {
         match self {
-            Self::WebSocket(e) => {
-                SimpleError::new(SignalErrorCode::WebSocket, format!("WebSocket error: {e}"))
+            Self::WebSocket(e) => format!("WebSocket error: {e}"),
+            Self::IncomingDataInvalid => format!("Protocol error: {self}"),
+            Self::RequestHasInvalidHeader => {
+                format!("internal error: {self}")
             }
-            Self::IncomingDataInvalid => SimpleError::new(
-                SignalErrorCode::NetworkProtocol,
-                format!("Protocol error: {self}"),
-            ),
-            Self::RequestHasInvalidHeader => SimpleError::new(
-                SignalErrorCode::InternalError,
-                format!("internal error: {self}"),
-            ),
-            Self::RequestTimedOut => {
-                SimpleError::new(SignalErrorCode::RequestTimedOut, "Request timed out")
-            }
-            Self::Disconnected => SimpleError::new(
-                SignalErrorCode::ChatServiceInactive,
-                "Chat service disconnected",
-            ),
-            Self::ConnectionInvalidated => SimpleError::new(
-                SignalErrorCode::ConnectionInvalidated,
-                "Connection invalidated",
-            ),
-            Self::ConnectedElsewhere => {
-                SimpleError::new(SignalErrorCode::ConnectedElsewhere, "Connected elsewhere")
-            }
+            Self::RequestTimedOut => "Request timed out".to_string(),
+            Self::Disconnected => "Chat service disconnected".to_owned(),
+            Self::ConnectionInvalidated => "Connection invalidated".to_owned(),
+            Self::ConnectedElsewhere => "Connected elsewhere".to_owned(),
         }
-    }
-}
-
-impl<E: IntoFfiError> IntoFfiError
-    for libsignal_net_chat::api::RequestError<E, libsignal_net_chat::api::DisconnectedError>
-where
-    libsignal_net_chat::api::RequestError<E>: std::fmt::Display,
-{
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        match self {
-            Self::Timeout => SignalFfiError::from(SimpleError::new(
-                SignalErrorCode::RequestTimedOut,
-                self.to_string(),
-            )),
-            Self::Unexpected { log_safe: _ } => {
-                SimpleError::new(SignalErrorCode::NetworkProtocol, self.to_string()).into()
-            }
-            Self::ServerSideError => {
-                // TODO: "IO error" isn't really apt at all, but it is an existing error code that
-                // the iOS app considers retryable.
-                SimpleError::new(SignalErrorCode::IoError, self.to_string()).into()
-            }
-            Self::Other(err) => err.into_ffi_error().into(),
-            Self::RetryLater(retry_later) => retry_later.into(),
-            Self::Challenge(challenge) => challenge.into(),
-            Self::Disconnected(d) => d.into_ffi_error().into(),
-        }
-    }
-}
-
-impl FfiError for libsignal_net_chat::api::messages::MultiRecipientSendFailure {
-    fn describe(&self) -> Cow<'_, str> {
-        self.to_string().into()
     }
 
     fn code(&self) -> SignalErrorCode {
         match self {
-            Self::Unauthorized => SignalErrorCode::RequestUnauthorized,
-            Self::MismatchedDevices(_) => SignalErrorCode::MismatchedDevices,
-        }
-    }
-
-    fn provide_mismatched_device_errors(&self) -> Result<&[MismatchedDeviceError], WrongErrorKind> {
-        match self {
-            Self::Unauthorized => Err(WrongErrorKind),
-            Self::MismatchedDevices(mismatched_device_errors) => Ok(mismatched_device_errors),
-        }
-    }
-}
-
-impl IntoFfiError for libsignal_net_chat::api::DisconnectedError {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        let code = match self {
-            Self::ConnectedElsewhere => SignalErrorCode::ConnectedElsewhere,
+            Self::WebSocket(_) => SignalErrorCode::WebSocket,
+            Self::IncomingDataInvalid => SignalErrorCode::NetworkProtocol,
+            Self::RequestHasInvalidHeader => SignalErrorCode::InternalError,
+            Self::RequestTimedOut => SignalErrorCode::RequestTimedOut,
+            Self::Disconnected => SignalErrorCode::ChatServiceInactive,
             Self::ConnectionInvalidated => SignalErrorCode::ConnectionInvalidated,
-            Self::Transport { .. } => SignalErrorCode::NetworkProtocol,
-            Self::Closed => SignalErrorCode::ChatServiceInactive,
-        };
-        SimpleError::new(code, self.to_string())
+            Self::ConnectedElsewhere => SignalErrorCode::ConnectedElsewhere,
+        }
+    }
+    fn provide_retry_after_seconds(&self) -> Result<u32, WrongErrorKind> {
+        Err(WrongErrorKind)
     }
 }
 
-impl IntoFfiError for KeyTransError {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        let message = self.to_string();
-        let code = match self {
-            Self::VerificationFailed(libsignal_keytrans::Error::VerificationFailed(_)) => {
+impl FfiError for libsignal_net::keytrans::Error {
+    fn describe(&self) -> String {
+        match self {
+            Error::ChatSendError(err) => err.describe(),
+            Error::RequestFailed(_)
+            | Error::InvalidResponse(_)
+            | Error::InvalidRequest(_)
+            | Error::NonFatalVerificationFailure(_)
+            | Error::FatalVerificationFailure(_) => self.to_string(),
+        }
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        match self {
+            Error::ChatSendError(err) => err.code(),
+            Error::RequestFailed(_) => SignalErrorCode::NetworkProtocol,
+            Error::InvalidResponse(_)
+            | Error::InvalidRequest(_)
+            | Error::NonFatalVerificationFailure(_) => SignalErrorCode::KeyTransparencyError,
+            Error::FatalVerificationFailure(_) => {
                 SignalErrorCode::KeyTransparencyVerificationFailed
             }
-            Self::VerificationFailed(_) | Self::InvalidResponse(_) | Self::InvalidRequest(_) => {
-                SignalErrorCode::KeyTransparencyError
-            }
-        };
-        SimpleError::new(code, message)
-    }
-}
-
-impl FfiError for RateLimitChallenge {
-    fn describe(&self) -> Cow<'_, str> {
-        self.to_string().into()
-    }
-
-    fn code(&self) -> SignalErrorCode {
-        SignalErrorCode::RateLimitChallenge
-    }
-    fn provide_rate_limit_challenge(&self) -> Result<&RateLimitChallenge, WrongErrorKind> {
-        Ok(self)
+        }
     }
 }
 
 mod registration {
-    use libsignal_net_chat::api::registration::{
-        CheckSvr2CredentialsError, CreateSessionError, RegisterAccountError,
-        RequestVerificationCodeError, ResumeSessionError, SubmitVerificationError,
-        UpdateSessionError,
+    use libsignal_net::infra::errors::LogSafeDisplay;
+    use libsignal_net::registration::{
+        CheckSvr2CredentialsError, CreateSessionError, RegisterAccountError, RegistrationLock,
+        RequestError, RequestVerificationCodeError, ResumeSessionError, SubmitVerificationError,
+        UpdateSessionError, VerificationCodeNotDeliverable,
     };
-    use libsignal_net_chat::registration::RequestError;
 
     use super::*;
 
-    // We require Display but not LogSafeDisplay for `E` because we will only format other cases of
-    // Self.
-    impl<E> IntoFfiError for RequestError<E>
-    where
-        E: std::fmt::Display + IntoFfiError,
-    {
-        fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-            match self {
-                RequestError::Timeout => SignalFfiError::from(SimpleError::new(
-                    SignalErrorCode::RequestTimedOut,
-                    self.to_string(),
-                )),
-                RequestError::ServerSideError | RequestError::Unexpected { log_safe: _ } => {
-                    SimpleError::new(SignalErrorCode::RegistrationUnknown, self.to_string()).into()
+    #[derive(Debug, derive_more::From)]
+    pub enum RegistrationError<'a> {
+        InvalidSessionId,
+        RequestNotValid,
+        RetryLater(&'a RetryLater),
+        Unknown,
+        SessionNotFound,
+        NotReadyForVerification,
+        SendVerificationCodeFailed,
+        CodeNotDeliverable(&'a VerificationCodeNotDeliverable),
+        SessionUpdateRejected,
+        CredentialsCouldNotBeParsed,
+        DeviceTransferPossible,
+        RegistrationRecoveryVerificationFailed,
+        RegistrationLock(&'a RegistrationLock),
+    }
+
+    impl<'a> From<RegistrationError<'a>> for SignalErrorCode {
+        fn from(value: RegistrationError<'a>) -> Self {
+            match value {
+                RegistrationError::InvalidSessionId => Self::RegistrationInvalidSessionId,
+                RegistrationError::RequestNotValid => Self::RegistrationRequestNotValid,
+                RegistrationError::Unknown => Self::RegistrationUnknown,
+                RegistrationError::RetryLater(retry_later) => retry_later.code(),
+                RegistrationError::SessionNotFound => Self::RegistrationSessionNotFound,
+                RegistrationError::NotReadyForVerification => {
+                    Self::RegistrationNotReadyForVerification
                 }
-                RequestError::Other(err) => err.into_ffi_error().into(),
-                RequestError::RetryLater(retry_later) => retry_later.into(),
-                RequestError::Challenge(challenge) => challenge.into(),
-                RequestError::Disconnected(d) => d.into_ffi_error().into(),
+                RegistrationError::SendVerificationCodeFailed => {
+                    Self::RegistrationSendVerificationCodeFailed
+                }
+                RegistrationError::CodeNotDeliverable(_) => Self::RegistrationCodeNotDeliverable,
+                RegistrationError::SessionUpdateRejected => Self::RegistrationSessionUpdateRejected,
+                RegistrationError::CredentialsCouldNotBeParsed => {
+                    Self::RegistrationCredentialsCouldNotBeParsed
+                }
+                RegistrationError::DeviceTransferPossible => {
+                    Self::RegistrationDeviceTransferPossible
+                }
+                RegistrationError::RegistrationRecoveryVerificationFailed => {
+                    Self::RegistrationRecoveryVerificationFailed
+                }
+                RegistrationError::RegistrationLock(_) => Self::RegistrationLock,
             }
         }
     }
 
-    impl IntoFfiError for CreateSessionError
+    impl<E> FfiError for RequestError<E>
     where
-        Self: LogSafeDisplay,
+        E: Send + LogSafeDisplay + std::fmt::Debug + 'static,
+        for<'a> &'a E: Into<RegistrationError<'a>>,
     {
-        fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-            let code = match &self {
-                Self::InvalidSessionId => SignalErrorCode::RegistrationInvalidSessionId,
-            };
-            SimpleError::new(code, self.to_string())
-        }
-    }
-
-    impl IntoFfiError for ResumeSessionError
-    where
-        Self: LogSafeDisplay,
-    {
-        fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-            let code = match &self {
-                Self::InvalidSessionId => SignalErrorCode::RegistrationInvalidSessionId,
-                Self::SessionNotFound => SignalErrorCode::RegistrationSessionNotFound,
-            };
-            SimpleError::new(code, self.to_string())
-        }
-    }
-
-    impl IntoFfiError for RequestVerificationCodeError
-    where
-        Self: LogSafeDisplay,
-    {
-        fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-            let code = match &self {
-                Self::InvalidSessionId => SignalErrorCode::RegistrationInvalidSessionId,
-                Self::SessionNotFound => SignalErrorCode::RegistrationSessionNotFound,
-                Self::NotReadyForVerification => {
-                    SignalErrorCode::RegistrationNotReadyForVerification
-                }
-                Self::SendFailed => SignalErrorCode::RegistrationSendVerificationCodeFailed,
-                Self::CodeNotDeliverable(_) => {
-                    // Re-match as owned.
-                    return SignalFfiError::from(
-                        assert_matches!(self, Self::CodeNotDeliverable(inner) => inner),
-                    );
-                }
-            };
-            SimpleError::new(code, self.to_string()).into()
-        }
-    }
-
-    impl FfiError for VerificationCodeNotDeliverable {
-        fn describe(&self) -> Cow<'_, str> {
-            "the code could not be delivered".into()
-        }
-
         fn code(&self) -> SignalErrorCode {
-            SignalErrorCode::RegistrationCodeNotDeliverable
+            let error_class = match self {
+                RequestError::Timeout => return SignalErrorCode::RequestTimedOut,
+                RequestError::RequestWasNotValid => RegistrationError::RequestNotValid,
+                RequestError::Unknown(_) => RegistrationError::Unknown,
+                RequestError::Other(err) => err.into(),
+            };
+            error_class.into()
         }
 
+        fn describe(&self) -> String {
+            self.to_string()
+        }
+        fn provide_retry_after_seconds(&self) -> Result<u32, WrongErrorKind> {
+            match self {
+                RequestError::Other(e) => match e.into() {
+                    RegistrationError::RetryLater(retry) => retry.provide_retry_after_seconds(),
+                    _ => Err(WrongErrorKind),
+                },
+                RequestError::Timeout
+                | RequestError::RequestWasNotValid
+                | RequestError::Unknown(_) => Err(WrongErrorKind),
+            }
+        }
         fn provide_registration_code_not_deliverable(
             &self,
         ) -> Result<&VerificationCodeNotDeliverable, WrongErrorKind> {
-            Ok(self)
+            match self {
+                RequestError::Other(e) => match e.into() {
+                    RegistrationError::CodeNotDeliverable(code) => Ok(code),
+                    _ => Err(WrongErrorKind),
+                },
+                RequestError::Timeout
+                | RequestError::RequestWasNotValid
+                | RequestError::Unknown(_) => Err(WrongErrorKind),
+            }
         }
-    }
-
-    impl IntoFfiError for UpdateSessionError
-    where
-        Self: LogSafeDisplay,
-    {
-        fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-            let code = match &self {
-                Self::Rejected => SignalErrorCode::RegistrationSessionUpdateRejected,
-            };
-            SimpleError::new(code, self.to_string())
-        }
-    }
-
-    impl IntoFfiError for SubmitVerificationError
-    where
-        Self: LogSafeDisplay,
-    {
-        fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-            let code = match &self {
-                Self::InvalidSessionId => SignalErrorCode::RegistrationInvalidSessionId,
-                Self::SessionNotFound => SignalErrorCode::RegistrationSessionNotFound,
-                Self::NotReadyForVerification => {
-                    SignalErrorCode::RegistrationNotReadyForVerification
-                }
-            };
-            SimpleError::new(code, self.to_string())
-        }
-    }
-
-    impl IntoFfiError for CheckSvr2CredentialsError
-    where
-        Self: LogSafeDisplay,
-    {
-        fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-            let code = match &self {
-                Self::CredentialsCouldNotBeParsed => {
-                    SignalErrorCode::RegistrationCredentialsCouldNotBeParsed
-                }
-            };
-            SimpleError::new(code, self.to_string())
-        }
-    }
-
-    impl IntoFfiError for RegisterAccountError
-    where
-        Self: LogSafeDisplay,
-    {
-        fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-            let code = match &self {
-                Self::DeviceTransferIsPossibleButNotSkipped => {
-                    SignalErrorCode::RegistrationDeviceTransferPossible
-                }
-                Self::RegistrationRecoveryVerificationFailed => {
-                    SignalErrorCode::RegistrationRecoveryVerificationFailed
-                }
-                Self::RegistrationLock(_) => {
-                    // Re-match as owned.
-                    return SignalFfiError::from(
-                        assert_matches!(self, Self::RegistrationLock(inner) => inner),
-                    );
-                }
-            };
-            SimpleError::new(code, self.to_string()).into()
-        }
-    }
-
-    impl FfiError for RegistrationLock {
-        fn describe(&self) -> Cow<'_, str> {
-            "registration lock is enabled".into()
-        }
-
-        fn code(&self) -> SignalErrorCode {
-            SignalErrorCode::RegistrationLock
-        }
-
         fn provide_registration_lock(&self) -> Result<&RegistrationLock, WrongErrorKind> {
-            Ok(self)
+            match self {
+                RequestError::Other(e) => match e.into() {
+                    RegistrationError::RegistrationLock(lock) => Ok(lock),
+                    _ => Err(WrongErrorKind),
+                },
+                RequestError::Timeout
+                | RequestError::RequestWasNotValid
+                | RequestError::Unknown(_) => Err(WrongErrorKind),
+            }
         }
     }
-}
 
-impl IntoFfiError for http::uri::InvalidUri {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        SimpleError::new(
-            SignalErrorCode::InvalidArgument,
-            format!("invalid argument: {self}"),
-        )
+    impl<'a> From<&'a CreateSessionError> for RegistrationError<'a> {
+        fn from(value: &'a CreateSessionError) -> Self {
+            match value {
+                CreateSessionError::InvalidSessionId => Self::InvalidSessionId,
+                CreateSessionError::RetryLater(retry) => retry.into(),
+            }
+        }
     }
-}
 
-#[cfg(feature = "signal-media")]
-impl IntoFfiError for signal_media::sanitize::mp4::Error {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        match self {
-            Self::Io(e) => e.into_ffi_error().into(),
-            Self::Parse(e) => {
-                use signal_media::sanitize::mp4::ParseError;
-                let code = match e.kind {
-                    ParseError::InvalidBoxLayout
-                    | ParseError::InvalidInput
-                    | ParseError::MissingRequiredBox { .. }
-                    | ParseError::TruncatedBox => SignalErrorCode::InvalidMediaInput,
+    impl<'a> From<&'a ResumeSessionError> for RegistrationError<'a> {
+        fn from(value: &'a ResumeSessionError) -> Self {
+            match value {
+                ResumeSessionError::InvalidSessionId => Self::InvalidSessionId,
+                ResumeSessionError::SessionNotFound => Self::SessionNotFound,
+            }
+        }
+    }
 
-                    ParseError::UnsupportedBoxLayout
-                    | ParseError::UnsupportedBox { .. }
-                    | ParseError::UnsupportedFormat { .. } => {
-                        SignalErrorCode::UnsupportedMediaInput
-                    }
-                };
-                SimpleError::new(code, format!("Mp4 sanitizer failed to parse mp4 file: {e}"))
-                    .into()
+    impl<'a> From<&'a RequestVerificationCodeError> for RegistrationError<'a> {
+        fn from(value: &'a RequestVerificationCodeError) -> Self {
+            match value {
+                RequestVerificationCodeError::InvalidSessionId => Self::InvalidSessionId,
+                RequestVerificationCodeError::SessionNotFound => Self::SessionNotFound,
+                RequestVerificationCodeError::NotReadyForVerification => {
+                    Self::NotReadyForVerification
+                }
+                RequestVerificationCodeError::SendFailed => Self::SendVerificationCodeFailed,
+                RequestVerificationCodeError::CodeNotDeliverable(not_deliverable) => {
+                    Self::CodeNotDeliverable(not_deliverable)
+                }
+                RequestVerificationCodeError::RetryLater(retry) => retry.into(),
+            }
+        }
+    }
+
+    impl<'a> From<&'a UpdateSessionError> for RegistrationError<'a> {
+        fn from(value: &'a UpdateSessionError) -> Self {
+            match value {
+                UpdateSessionError::Rejected => Self::SessionUpdateRejected,
+                UpdateSessionError::RetryLater(retry) => retry.into(),
+            }
+        }
+    }
+
+    impl<'a> From<&'a SubmitVerificationError> for RegistrationError<'a> {
+        fn from(value: &'a SubmitVerificationError) -> Self {
+            match value {
+                SubmitVerificationError::InvalidSessionId => Self::InvalidSessionId,
+                SubmitVerificationError::SessionNotFound => Self::SessionNotFound,
+                SubmitVerificationError::NotReadyForVerification => Self::NotReadyForVerification,
+                SubmitVerificationError::RetryLater(retry) => retry.into(),
+            }
+        }
+    }
+
+    impl<'a> From<&'a CheckSvr2CredentialsError> for RegistrationError<'a> {
+        fn from(value: &'a CheckSvr2CredentialsError) -> Self {
+            match value {
+                CheckSvr2CredentialsError::CredentialsCouldNotBeParsed => {
+                    Self::CredentialsCouldNotBeParsed
+                }
+            }
+        }
+    }
+
+    impl<'a> From<&'a RegisterAccountError> for RegistrationError<'a> {
+        fn from(value: &'a RegisterAccountError) -> Self {
+            match value {
+                RegisterAccountError::DeviceTransferIsPossibleButNotSkipped => {
+                    Self::DeviceTransferPossible
+                }
+                RegisterAccountError::RetryLater(retry_later) => Self::RetryLater(retry_later),
+                RegisterAccountError::RegistrationRecoveryVerificationFailed => {
+                    Self::RegistrationRecoveryVerificationFailed
+                }
+                RegisterAccountError::RegistrationLock(registration_lock) => {
+                    Self::RegistrationLock(registration_lock)
+                }
             }
         }
     }
 }
 
-#[cfg(feature = "signal-media")]
-impl IntoFfiError for signal_media::sanitize::webp::Error {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        match self {
-            Self::Io(e) => e.into_ffi_error().into(),
-            Self::Parse(e) => {
-                use signal_media::sanitize::webp::ParseError;
-                let code = match e.kind {
-                    ParseError::InvalidChunkLayout
-                    | ParseError::InvalidInput
-                    | ParseError::InvalidVp8lPrefixCode
-                    | ParseError::MissingRequiredChunk { .. }
-                    | ParseError::TruncatedChunk => SignalErrorCode::InvalidMediaInput,
+impl FfiError for http::uri::InvalidUri {
+    fn describe(&self) -> String {
+        format!("invalid argument: {self}")
+    }
 
-                    ParseError::UnsupportedChunk { .. }
-                    | ParseError::UnsupportedVp8lVersion { .. } => {
-                        SignalErrorCode::UnsupportedMediaInput
-                    }
-                };
-                SimpleError::new(
-                    code,
-                    format!("WebP sanitizer failed to parse webp file: {e}"),
-                )
-                .into()
-            }
+    fn code(&self) -> SignalErrorCode {
+        SignalErrorCode::InvalidArgument
+    }
+}
+
+#[cfg(feature = "signal-media")]
+impl FfiError for signal_media::sanitize::mp4::Error {
+    fn describe(&self) -> String {
+        match self {
+            Self::Io(e) => e.describe(),
+            Self::Parse(e) => format!("Mp4 sanitizer failed to parse mp4 file: {e}"),
+        }
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        use signal_media::sanitize::mp4::ParseError;
+        match self {
+            Self::Io(e) => e.code(),
+            Self::Parse(e) => match e.kind {
+                ParseError::InvalidBoxLayout
+                | ParseError::InvalidInput
+                | ParseError::MissingRequiredBox { .. }
+                | ParseError::TruncatedBox => SignalErrorCode::InvalidMediaInput,
+
+                ParseError::UnsupportedBoxLayout
+                | ParseError::UnsupportedBox { .. }
+                | ParseError::UnsupportedFormat { .. } => SignalErrorCode::UnsupportedMediaInput,
+            },
+        }
+    }
+}
+
+#[cfg(feature = "signal-media")]
+impl FfiError for signal_media::sanitize::webp::Error {
+    fn describe(&self) -> String {
+        match self {
+            Self::Io(e) => e.describe(),
+            Self::Parse(e) => format!("WebP sanitizer failed to parse webp file: {e}"),
+        }
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        use signal_media::sanitize::webp::ParseError;
+        match self {
+            Self::Io(e) => e.code(),
+            Self::Parse(e) => match e.kind {
+                ParseError::InvalidChunkLayout
+                | ParseError::InvalidInput
+                | ParseError::InvalidVp8lPrefixCode
+                | ParseError::MissingRequiredChunk { .. }
+                | ParseError::TruncatedChunk => SignalErrorCode::InvalidMediaInput,
+
+                ParseError::UnsupportedChunk { .. } | ParseError::UnsupportedVp8lVersion { .. } => {
+                    SignalErrorCode::UnsupportedMediaInput
+                }
+            },
         }
     }
 }
 
 impl FfiError for libsignal_message_backup::ReadError {
-    fn describe(&self) -> Cow<'_, str> {
-        self.to_string().into()
+    fn describe(&self) -> String {
+        self.to_string()
     }
 
     fn code(&self) -> SignalErrorCode {
@@ -1054,93 +893,43 @@ impl FfiError for libsignal_message_backup::ReadError {
     }
 }
 
-impl IntoFfiError for NullPointerError {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        SimpleError::new(SignalErrorCode::NullParameter, "null pointer")
-    }
-}
-
-impl IntoFfiError for UnexpectedPanic {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        SimpleError::new(
-            SignalErrorCode::InternalError,
-            format!("unexpected panic: {}", describe_panic(&self.0)),
-        )
-    }
-}
-
-impl IntoFfiError for std::str::Utf8Error {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        SimpleError::new(SignalErrorCode::InvalidUtf8String, "invalid UTF8 string")
-    }
-}
-
-impl IntoFfiError for FutureCancelled {
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        SimpleError::new(SignalErrorCode::Cancelled, "cancelled")
-    }
-}
-
-#[derive(Debug)]
-struct SvrRestoreFailed {
-    tries_remaining: u32,
-}
-
-impl FfiError for SvrRestoreFailed {
-    fn describe(&self) -> Cow<'_, str> {
-        format!(
-            "Failure to restore data; {} tries remaining",
-            self.tries_remaining
-        )
-        .into()
+impl FfiError for NullPointerError {
+    fn describe(&self) -> String {
+        "null pointer".to_owned()
     }
 
     fn code(&self) -> SignalErrorCode {
-        SignalErrorCode::SvrRestoreFailed
-    }
-
-    fn provide_tries_remaining(&self) -> Result<u32, WrongErrorKind> {
-        Ok(self.tries_remaining)
+        SignalErrorCode::NullParameter
     }
 }
 
-impl IntoFfiError for libsignal_net::svrb::Error
-where
-    Self: LogSafeDisplay,
-{
-    fn into_ffi_error(self) -> impl Into<SignalFfiError> {
-        use libsignal_net::infra::ws::WebSocketConnectError;
-        match self {
-            e @ Self::AllConnectionAttemptsFailed => {
-                SimpleError::new(SignalErrorCode::ConnectionFailed, e.to_string()).into()
-            }
-            Self::Connect(e) => match e {
-                WebSocketConnectError::Transport(e) => {
-                    SimpleError::new(SignalErrorCode::IoError, format!("IO error: {e}")).into()
-                }
-                WebSocketConnectError::WebSocketError(e) => {
-                    SimpleError::new(SignalErrorCode::WebSocket, format!("WebSocket error: {e}"))
-                        .into()
-                }
-            },
-            Self::RateLimited(inner) => inner.into_ffi_error().into(),
-            Self::Service(e) => {
-                SimpleError::new(SignalErrorCode::WebSocket, format!("WebSocket error: {e}")).into()
-            }
-            Self::AttestationError(inner) => inner.into_ffi_error().into(),
-            e @ Self::Protocol(_) => {
-                SimpleError::new(SignalErrorCode::NetworkProtocol, e.to_string()).into()
-            }
-            Self::RestoreFailed(tries_remaining) => SvrRestoreFailed { tries_remaining }.into(),
-            e @ Self::DataMissing => {
-                SimpleError::new(SignalErrorCode::SvrDataMissing, e.to_string()).into()
-            }
-            e @ (Self::PreviousBackupDataInvalid
-            | Self::MetadataInvalid
-            | Self::DecryptionError(_)) => {
-                SimpleError::new(SignalErrorCode::InvalidArgument, e.to_string()).into()
-            }
-        }
+impl FfiError for UnexpectedPanic {
+    fn describe(&self) -> String {
+        format!("unexpected panic: {}", describe_panic(&self.0))
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        SignalErrorCode::InternalError
+    }
+}
+
+impl FfiError for std::str::Utf8Error {
+    fn describe(&self) -> String {
+        "invalid UTF8 string".to_owned()
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        SignalErrorCode::InvalidUtf8String
+    }
+}
+
+impl FfiError for FutureCancelled {
+    fn describe(&self) -> String {
+        "cancelled".to_owned()
+    }
+
+    fn code(&self) -> SignalErrorCode {
+        SignalErrorCode::Cancelled
     }
 }
 
@@ -1160,13 +949,6 @@ impl CallbackError {
             Some(value) => Err(Self { value }),
         }
     }
-
-    pub fn log_on_error(operation: &str, value: i32) {
-        match Self::check(value) {
-            Ok(()) => {}
-            Err(value) => log::error!("failed '{operation}' with {value}"),
-        }
-    }
 }
 
 impl fmt::Display for CallbackError {
@@ -1176,40 +958,3 @@ impl fmt::Display for CallbackError {
 }
 
 impl std::error::Error for CallbackError {}
-
-impl From<WithContext<CallbackError>> for SignalProtocolError {
-    fn from(value: WithContext<CallbackError>) -> Self {
-        let WithContext { operation, inner } = value;
-        SignalProtocolError::for_application_callback(operation)(inner)
-    }
-}
-
-/// This is overly general, but in practice is only used to handle errors converting callback
-/// results.
-impl From<WithContext<SignalFfiError>> for SignalProtocolError {
-    fn from(value: WithContext<SignalFfiError>) -> Self {
-        let WithContext {
-            operation: _,
-            inner,
-        } = value;
-        SignalProtocolError::FfiBindingError(inner.to_string())
-    }
-}
-
-impl From<WithContext<CallbackError>> for std::io::Error {
-    fn from(value: WithContext<CallbackError>) -> Self {
-        std::io::Error::other(SignalProtocolError::from(value))
-    }
-}
-
-/// This is overly general, but in practice is only used to handle errors converting callback
-/// results.
-impl From<WithContext<SignalFfiError>> for std::io::Error {
-    fn from(value: WithContext<SignalFfiError>) -> Self {
-        let WithContext {
-            operation: _,
-            inner,
-        } = value;
-        std::io::Error::other(inner.to_string())
-    }
-}

@@ -55,15 +55,10 @@ public class ThrowsAfterInputStream: SignalInputStream {
     private var readBeforeThrow: UInt64
 }
 
-#if !os(iOS) || targetEnvironment(simulator)
-
 func readResource(forName name: String) -> Data {
     try! Data(
-        contentsOf: URL(fileURLWithPath: #filePath)
+        contentsOf: URL(fileURLWithPath: #file)
             .deletingLastPathComponent()
             .appendingPathComponent("Resources")
-            .appendingPathComponent(name)
-    )
+            .appendingPathComponent(name))
 }
-
-#endif

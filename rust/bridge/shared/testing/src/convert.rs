@@ -11,6 +11,7 @@ use libsignal_bridge_macros::*;
 use libsignal_bridge_types::net::TokioAsyncContext;
 use libsignal_bridge_types::support::*;
 use libsignal_bridge_types::*;
+use libsignal_protocol::SignalProtocolError;
 use uuid::Uuid;
 
 use crate::types::*;
@@ -40,7 +41,6 @@ where
         &self,
         make_future: impl FnOnce(Self::Cancellation) -> F,
         completer: <F::Output as ResultReporter>::Receiver,
-        _label: &'static str,
     ) -> CancellationId {
         let future = make_future(std::future::pending());
         std::thread::spawn(move || {
@@ -69,14 +69,9 @@ async fn TESTING_FutureSuccess(input: u8) -> i32 {
     i32::from(input) * 2
 }
 
-#[bridge_io(TokioAsyncContext)]
-async fn TESTING_TokioAsyncContext_FutureSuccessBytes(count: i32) -> Vec<u8> {
-    vec![0; usize::try_from(count).unwrap()]
-}
-
 #[bridge_io(NonSuspendingBackgroundThreadRuntime)]
-async fn TESTING_FutureFailure(_input: u8) -> Result<i32, IllegalArgumentError> {
-    Err(IllegalArgumentError::new("failure"))
+async fn TESTING_FutureFailure(_input: u8) -> Result<i32, SignalProtocolError> {
+    Err(SignalProtocolError::InvalidArgument("failure".to_string()))
 }
 
 bridge_handle_fns!(TestingFutureCancellationCounter, clone = false);
@@ -101,15 +96,6 @@ async fn TESTING_FutureCancellationCounter_WaitForCount(
 #[bridge_io(TokioAsyncContext)]
 async fn TESTING_FutureIncrementOnCancel(_guard: TestingFutureCancellationGuard) {
     std::future::pending().await
-}
-
-#[bridge_io(TokioAsyncContext, ffi = false, node = false)]
-async fn TESTING_AcquireSemaphoreAndGet(
-    semaphore: &TestingSemaphore,
-    value_holder: &TestingValueHolder,
-) -> i32 {
-    semaphore.acquire().await.expect("not dropped yet").forget();
-    value_holder.0.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 #[bridge_io(TokioAsyncContext)]
@@ -255,26 +241,6 @@ async fn TESTING_FutureThrowsCustomErrorType() -> Result<(), CustomErrorType> {
     std::future::ready(Err(CustomErrorType)).await
 }
 
-#[cfg(feature = "jni")]
-struct PoisonErrorType;
-
-#[cfg(feature = "jni")]
-impl From<PoisonErrorType> for crate::jni::SignalJniError {
-    fn from(PoisonErrorType: PoisonErrorType) -> Self {
-        crate::jni::TestingError {
-            exception_class: crate::jni::ClassName(
-                "org.signal.libsignal.internal.GuaranteedNonexistentException",
-            ),
-        }
-        .into()
-    }
-}
-
-#[bridge_io(NonSuspendingBackgroundThreadRuntime, ffi = false, node = false)]
-async fn TESTING_FutureThrowsPoisonErrorType() -> Result<(), PoisonErrorType> {
-    std::future::ready(Err(PoisonErrorType)).await
-}
-
 #[bridge_fn]
 fn TESTING_ReturnStringArray() -> Box<[String]> {
     ["easy", "as", "ABC", "123"]
@@ -361,12 +327,4 @@ async fn TESTING_InputStreamReadIntoZeroLengthSlice(
     assert_eq!(remainder, b"KLMNOPQRSTUVWXYZ");
 
     first.into_iter().chain(remainder).collect()
-}
-
-#[bridge_fn(jni = false, node = false)]
-fn TESTING_FingerprintVersionMismatchError(
-    theirs: u32,
-    ours: u32,
-) -> Result<(), libsignal_protocol::FingerprintError> {
-    Err(libsignal_protocol::FingerprintError::VersionMismatch { theirs, ours })
 }

@@ -17,9 +17,8 @@ use crate::common::sho::*;
 use crate::common::simple_types::*;
 use crate::crypto::profile_key_struct;
 
-static SYSTEM_PARAMS: LazyLock<SystemParams> = LazyLock::new(|| {
-    crate::deserialize(&SystemParams::SYSTEM_HARDCODED).expect("valid hardcoded params")
-});
+static SYSTEM_PARAMS: LazyLock<SystemParams> =
+    LazyLock::new(|| crate::deserialize::<SystemParams>(&SystemParams::SYSTEM_HARDCODED).unwrap());
 
 #[derive(Copy, Clone, PartialEq, Eq, Serialize, Deserialize, PartialDefault)]
 pub struct SystemParams {

@@ -4,12 +4,12 @@
 //
 
 use crypto_common::KeyInit;
-use hmac::Hmac;
 use hmac::digest::typenum::Unsigned;
-use hmac::digest::{OutputSizeUser, crypto_common};
+use hmac::digest::{crypto_common, OutputSizeUser};
+use hmac::Hmac;
 use libsignal_bridge_macros::*;
 use libsignal_bridge_types::incremental_mac::*;
-use libsignal_protocol::incremental_mac::{Incremental, calculate_chunk_size};
+use libsignal_protocol::incremental_mac::{calculate_chunk_size, Incremental};
 
 use crate::support::*;
 use crate::*;
@@ -60,23 +60,12 @@ pub fn IncrementalMac_Finalize(mac: &mut IncrementalMac) -> Vec<u8> {
 bridge_handle_fns!(ValidatingMac, clone = false);
 
 #[bridge_fn]
-pub fn ValidatingMac_Initialize(
-    key: &[u8],
-    chunk_size: u32,
-    digests: &[u8],
-) -> Option<ValidatingMac> {
+pub fn ValidatingMac_Initialize(key: &[u8], chunk_size: u32, digests: &[u8]) -> ValidatingMac {
     let hmac =
         Hmac::<Digest>::new_from_slice(key).expect("Should be able to create a new HMAC instance");
-    if chunk_size == 0 {
-        return None;
-    }
     let incremental = Incremental::new(hmac, chunk_size as usize);
-    const MAC_SIZE: usize = <Digest as OutputSizeUser>::OutputSize::USIZE;
-    let (macs, macs_remainder) = digests.as_chunks::<MAC_SIZE>();
-    if !macs_remainder.is_empty() {
-        return None;
-    }
-    Some(ValidatingMac(Some(incremental.validating(macs.iter()))))
+    let macs = digests.chunks(<Digest as OutputSizeUser>::OutputSize::USIZE);
+    ValidatingMac(Some(incremental.validating(macs)))
 }
 
 #[bridge_fn]

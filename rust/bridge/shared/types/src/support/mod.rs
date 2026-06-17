@@ -3,9 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-use std::borrow::Cow;
 use std::future::Future;
-use std::marker::PhantomData;
 use std::num::NonZeroU64;
 
 mod as_type;
@@ -33,55 +31,9 @@ pub fn describe_panic(any: &Box<dyn std::any::Any + Send>) -> String {
 ///
 /// Only here so that we're not directly calling [`std::mem::transmute`], which is even more unsafe.
 /// All call sites need to explain why extending the lifetime is safe.
+#[cfg(any(feature = "ffi", feature = "node"))]
 pub(crate) unsafe fn extend_lifetime<'a, 'b: 'a, T: ?Sized>(some_ref: &'a T) -> &'b T {
-    unsafe { std::mem::transmute::<&'a T, &'b T>(some_ref) }
-}
-
-/// A wrapper around `&'inner T` that promises `'outer: 'inner`.
-///
-/// Meant to be used with _higher-ranked type bounds_ `for<'inner>` in the context of some broader
-/// lifetime `'outer`. Can usually be consumed like a normal reference because of the Deref impl.
-#[derive(derive_more::Deref)]
-pub struct LimitedLifetimeRef<'outer, 'inner, T>
-where
-    'outer: 'inner,
-{
-    #[deref]
-    inner: &'inner T,
-    parent: PhantomData<&'outer ()>,
-}
-
-impl<'outer, 'inner, T> From<&'inner T> for LimitedLifetimeRef<'outer, 'inner, T>
-where
-    'outer: 'inner,
-{
-    fn from(inner: &'inner T) -> Self {
-        Self {
-            inner,
-            parent: PhantomData,
-        }
-    }
-}
-
-/// An error indicating the caller passed an invalid argument (and they should have known it was
-/// invalid ahead of time).
-///
-/// Named for Java's `IllegalArgumentException`, which this will be thrown as in the JNI bridge.
-/// Remember that that's an unchecked exception; that should give you an idea of when this is the
-/// right error to use.
-#[derive(Debug)]
-pub struct IllegalArgumentError(pub(crate) Cow<'static, str>);
-
-impl IllegalArgumentError {
-    pub fn new(log_safe: impl Into<Cow<'static, str>>) -> Self {
-        Self(log_safe.into())
-    }
-}
-
-impl std::fmt::Display for IllegalArgumentError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
+    std::mem::transmute::<&'a T, &'b T>(some_ref)
 }
 
 /// With `bridge_handle_fns`, exposes a Rust type to each of the bridges as a boxed value.
@@ -331,7 +283,6 @@ pub trait AsyncRuntime<F: Future<Output: ResultReporter>>: AsyncRuntimeBase {
         &self,
         make_future: impl FnOnce(Self::Cancellation) -> F,
         completer: <F::Output as ResultReporter>::Receiver,
-        label: &'static str,
     ) -> CancellationId;
 }
 
@@ -350,38 +301,7 @@ impl<F: Future<Output: ResultReporter>> AsyncRuntime<F> for NoOpAsyncRuntime {
         &self,
         _make_future: impl FnOnce(Self::Cancellation) -> F,
         _completer: <F::Output as ResultReporter>::Receiver,
-        _label: &'static str,
     ) -> CancellationId {
         CancellationId::NotSupported
     }
-}
-
-/// A wrapper struct so we can implement e.g. [`PreKeyStore`](libsignal_protocol::PreKeyStore) for
-/// all `BridgePreKeyStore`s (the corresponding
-/// [`bridge_callbacks`](libsignal_bridge_macros::bridge_callbacks) trait).
-///
-/// Trying to do so directly would violate the [orphan rule][], because rustc doesn't know
-/// `BridgePreKeyStore` is only implemented by a closed set of types defined in this crate.
-///
-/// [orphan rule]:
-///     https://doc.rust-lang.org/book/ch20-02-advanced-traits.html#implementing-external-traits-with-the-newtype-pattern
-pub struct BridgedCallbacks<T>(pub T);
-
-/// Attaches context to a value, usually an error.
-///
-/// Intended to be used with `From` implementations, so standard Rust error handling idioms can work
-/// even for error types that want the additional context.
-pub struct WithContext<T> {
-    pub operation: &'static str,
-    pub inner: T,
-}
-
-/// Provides access to [`Result`]'s `Success` and `Error` types using associated type syntax.
-pub trait ResultLike {
-    type Success;
-    type Error;
-}
-impl<T, E> ResultLike for Result<T, E> {
-    type Success = T;
-    type Error = E;
 }

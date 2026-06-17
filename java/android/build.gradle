@@ -1,8 +1,7 @@
 import groovy.json.JsonSlurper
 
 plugins {
-    id 'com.android.library'
-    id 'kotlin-android'
+    id 'com.android.library' version '8.9.0'
     id 'maven-publish'
     id 'signing'
 }
@@ -22,7 +21,7 @@ android {
     ndkVersion '28.0.13004108'
 
     defaultConfig {
-        minSdkVersion 23
+        minSdkVersion 21
         targetSdkVersion 33
         multiDexEnabled true
         testInstrumentationRunner "org.signal.libsignal.util.AndroidJUnitRunner"
@@ -44,10 +43,6 @@ android {
                 srcDir '../client/src/test/java'
                 srcDir '../shared/test/java'
             }
-            kotlin {
-                srcDir '../client/src/test/java'
-                srcDir '../shared/test/java'
-            }
             resources {
                 srcDir '../client/src/test/resources'
             }
@@ -62,22 +57,6 @@ android {
     publishing {
         singleVariant('release')
     }
-}
-
-kotlin {
-    explicitApi()
-}
-
-task dokkaHtmlJar(type: Jar) {
-    dependsOn(dokkaGeneratePublicationHtml)
-    from(dokkaGeneratePublicationHtml)
-    archiveClassifier.set("dokka")
-}
-
-task dokkaJavadocJar(type: Jar) {
-    dependsOn(dokkaGeneratePublicationJavadoc)
-    from(dokkaGeneratePublicationJavadoc)
-    archiveClassifier.set("javadoc")
 }
 
 String collectTestEnvironment() {
@@ -100,27 +79,40 @@ String collectTestEnvironment() {
     result.join(",")
 }
 
-// We include the classes and data for rustls-platform-verifier ourselves,
-// but we want to make sure it's in sync with the Rust side.
-// So we check that there hasn't been a new release of the Android package since we made our fork.
-void checkRustlsPlatformVerifierVersion() {
+// From https://github.com/rustls/rustls-platform-verifier
+File findRustlsPlatformVerifierClasses() {
     def dependencyText = providers.exec {
         it.workingDir = project.rootDir.parentFile
         commandLine("bash", "java/find_cargo.sh", "metadata", "--format-version", "1")
     }.standardOutput.asText.get()
 
     def dependencyJson = new JsonSlurper().parseText(dependencyText)
-    def dependencyVersion = dependencyJson.packages.find { it.name == "rustls-platform-verifier-android" }.version
-    assert dependencyVersion == "0.1.1"
+    def manifestPath = file(dependencyJson.packages.find { it.name == "rustls-platform-verifier-android" }.manifest_path)
+
+    // Modifications here:
+    // Rather than use the Maven repository in the crates.io source, reference the AAR directly by path.
+    // Then, extract the classes from it so that we have a self-contained library.
+    def aar = fileTree(manifestPath.parentFile).matching {
+        include "maven/rustls/rustls-platform-verifier/*/rustls-platform-verifier-*.aar"
+    }.getSingleFile()
+    def classesJar = zipTree(aar).matching {
+        // Make sure there's nothing in the AAR that we haven't accounted for.
+        // This isn't perfect: there could be something important in AndroidManifest.xml.
+        // But it's likely good enough.
+        exclude "AndroidManifest.xml"
+        exclude "META-INF/com/android/build/gradle/aar-metadata.properties"
+        exclude "R.txt"
+    }.getSingleFile()
+    assert classesJar.name == "classes.jar"
+    return classesJar
 }
 
 dependencies {
-    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2'
+    implementation files(findRustlsPlatformVerifierClasses())
+
     androidTestImplementation "androidx.test:runner:1.4.0"
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
     androidTestImplementation 'com.googlecode.json-simple:json-simple:1.1'
-    androidTestImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2'
-    androidTestImplementation 'org.jetbrains.kotlin:kotlin-test:2.1.0'
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:1.1.6'
     api project(':client')
 }
@@ -149,24 +141,19 @@ task makeJniLibraries(type:Exec) {
 }
 
 task collectAssets(type:Copy) {
-    from('../../acknowledgments') {
-        include 'acknowledgments-android*.md'
-        rename 'acknowledgments-android(.*)[.]md', 'libsignal$1.md'
+    from('../../acknowledgments/acknowledgments.md') {
+        rename 'acknowledgments.md', 'libsignal.md'
     }
     into 'src/main/assets/acknowledgments'
 }
 
 // MARK: Publication
 afterEvaluate {
-    checkRustlsPlatformVerifierVersion()
-
     publishing {
         publications {
             mavenJava(MavenPublication) {
                 artifactId = archivesBaseName
                 from components.release
-                artifact dokkaHtmlJar
-                artifact dokkaJavadocJar
 
                 pom {
                     name = archivesBaseName

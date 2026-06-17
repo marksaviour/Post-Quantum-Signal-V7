@@ -8,27 +8,24 @@ import SignalFfi
 
 public class ServerCertificate: NativeHandleOwner<SignalMutPointerServerCertificate>, @unchecked Sendable {
     public convenience init<Bytes: ContiguousBytes>(_ bytes: Bytes) throws {
-        let handle = try bytes.withUnsafeBorrowedBuffer { bytes in
-            try invokeFnReturningValueByPointer(.init()) {
-                signal_server_certificate_deserialize($0, bytes)
-            }
+        let handle = try bytes.withUnsafeBorrowedBuffer {
+            var result = SignalMutPointerServerCertificate()
+            try checkError(signal_server_certificate_deserialize(&result, $0))
+            return result
         }
         self.init(owned: NonNull(handle)!)
     }
 
     // For testing
     public convenience init(keyId: UInt32, publicKey: PublicKey, trustRoot: PrivateKey) throws {
-        let result = try withAllBorrowed(publicKey, trustRoot) { publicKeyHandle, trustRootHandle in
-            try invokeFnReturningValueByPointer(.init()) {
-                signal_server_certificate_new($0, keyId, publicKeyHandle.const(), trustRootHandle.const())
-            }
+        var result = SignalMutPointerServerCertificate()
+        try withNativeHandles(publicKey, trustRoot) { publicKeyHandle, trustRootHandle in
+            try checkError(signal_server_certificate_new(&result, keyId, publicKeyHandle.const(), trustRootHandle.const()))
         }
         self.init(owned: NonNull(result)!)
     }
 
-    override internal class func destroyNativeHandle(
-        _ handle: NonNull<SignalMutPointerServerCertificate>
-    ) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerServerCertificate>) -> SignalFfiErrorRef? {
         return signal_server_certificate_destroy(handle.pointer)
     }
 
@@ -42,30 +39,30 @@ public class ServerCertificate: NativeHandleOwner<SignalMutPointerServerCertific
         }
     }
 
-    public func serialize() -> Data {
+    public func serialize() -> [UInt8] {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningData {
+                try invokeFnReturningArray {
                     signal_server_certificate_get_serialized($0, nativeHandle.const())
                 }
             }
         }
     }
 
-    public var certificateBytes: Data {
+    public var certificateBytes: [UInt8] {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningData {
+                try invokeFnReturningArray {
                     signal_server_certificate_get_certificate($0, nativeHandle.const())
                 }
             }
         }
     }
 
-    public var signatureBytes: Data {
+    public var signatureBytes: [UInt8] {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningData {
+                try invokeFnReturningArray {
                     signal_server_certificate_get_signature($0, nativeHandle.const())
                 }
             }
@@ -107,45 +104,33 @@ extension SignalConstPointerServerCertificate: SignalConstPointer {
 
 public class SenderCertificate: NativeHandleOwner<SignalMutPointerSenderCertificate>, @unchecked Sendable {
     public convenience init<Bytes: ContiguousBytes>(_ bytes: Bytes) throws {
-        let handle = try bytes.withUnsafeBorrowedBuffer { bytes in
-            try invokeFnReturningValueByPointer(.init()) {
-                signal_sender_certificate_deserialize($0, bytes)
-            }
+        let handle = try bytes.withUnsafeBorrowedBuffer {
+            var result = SignalMutPointerSenderCertificate()
+            try checkError(signal_sender_certificate_deserialize(&result, $0))
+            return result
         }
         self.init(owned: NonNull(handle)!)
     }
 
     // For testing
-    public convenience init(
-        sender: SealedSenderAddress,
-        publicKey: PublicKey,
-        expiration: UInt64,
-        signerCertificate: ServerCertificate,
-        signerKey: PrivateKey
-    ) throws {
-        let result = try withAllBorrowed(publicKey, signerCertificate, signerKey) {
-            publicKeyHandle,
-            signerCertificateHandle,
-            signerKeyHandle in
-            try invokeFnReturningValueByPointer(.init()) {
-                signal_sender_certificate_new(
-                    $0,
-                    sender.uuidString,
-                    sender.e164,
-                    sender.deviceId,
-                    publicKeyHandle.const(),
-                    expiration,
-                    signerCertificateHandle.const(),
-                    signerKeyHandle.const()
-                )
-            }
+    public convenience init(sender: SealedSenderAddress, publicKey: PublicKey, expiration: UInt64, signerCertificate: ServerCertificate, signerKey: PrivateKey) throws {
+        var result = SignalMutPointerSenderCertificate()
+        try withNativeHandles(publicKey, signerCertificate, signerKey) { publicKeyHandle, signerCertificateHandle, signerKeyHandle in
+            try checkError(signal_sender_certificate_new(
+                &result,
+                sender.uuidString,
+                sender.e164,
+                sender.deviceId,
+                publicKeyHandle.const(),
+                expiration,
+                signerCertificateHandle.const(),
+                signerKeyHandle.const()
+            ))
         }
         self.init(owned: NonNull(result)!)
     }
 
-    override internal class func destroyNativeHandle(
-        _ handle: NonNull<SignalMutPointerSenderCertificate>
-    ) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerSenderCertificate>) -> SignalFfiErrorRef? {
         return signal_sender_certificate_destroy(handle.pointer)
     }
 
@@ -169,30 +154,30 @@ public class SenderCertificate: NativeHandleOwner<SignalMutPointerSenderCertific
         }
     }
 
-    public func serialize() -> Data {
+    public func serialize() -> [UInt8] {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningData {
+                try invokeFnReturningArray {
                     signal_sender_certificate_get_serialized($0, nativeHandle.const())
                 }
             }
         }
     }
 
-    public var certificateBytes: Data {
+    public var certificateBytes: [UInt8] {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningData {
+                try invokeFnReturningArray {
                     signal_sender_certificate_get_certificate($0, nativeHandle.const())
                 }
             }
         }
     }
 
-    public var signatureBytes: Data {
+    public var signatureBytes: [UInt8] {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningData {
+                try invokeFnReturningArray {
                     signal_sender_certificate_get_signature($0, nativeHandle.const())
                 }
             }
@@ -252,31 +237,12 @@ public class SenderCertificate: NativeHandleOwner<SignalMutPointerSenderCertific
         }
     }
 
-    /// Validates `self` against the given trust root at the given current time.
-    ///
-    /// See ``validate(trustRoots:time:)`` for more information.
-    public func validate(trustRoot: PublicKey, time: UInt64) -> Bool {
-        return validate(trustRoots: [trustRoot], time: time)
-    }
-
-    /// Validates `self` against the given trust roots at the given current time.
-    ///
-    /// Checks the certificate against each key in `trustRoots` in constant time (that is, no result
-    /// is produced until every key is checked), making sure **one** of them has signed its embedded
-    /// server certificate. The `time` parameter is compared numerically against ``expiration``, and
-    /// is not required to use any specific units, but Signal uses milliseconds since 1970.
-    public func validate(trustRoots: [PublicKey], time: UInt64) -> Bool {
-        // Use withExtendedLifetime instead of withNativeHandle for the arrays of wrapper objects,
-        // which aren't compatible with withNativeHandle's simple lexical scoping.
-        return withExtendedLifetime(trustRoots) {
-            let trustRootHandles = trustRoots.map { $0.unsafeNativeHandle.const() }
-            return
-                (try? withAllBorrowed(self, .slice(trustRootHandles)) { certificateHandle, trustRootHandles in
-                    try invokeFnReturningBool {
-                        signal_sender_certificate_validate($0, certificateHandle.const(), trustRootHandles, time)
-                    }
-                }) ?? false
+    public func validate(trustRoot: PublicKey, time: UInt64) throws -> Bool {
+        var result = false
+        try withNativeHandles(self, trustRoot) { certificateHandle, trustRootHandle in
+            try checkError(signal_sender_certificate_validate(&result, certificateHandle.const(), trustRootHandle.const(), time))
         }
+        return result
     }
 }
 

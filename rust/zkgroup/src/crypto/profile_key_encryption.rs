@@ -18,9 +18,8 @@ use crate::common::sho::*;
 use crate::common::simple_types::*;
 use crate::crypto::profile_key_struct;
 
-static SYSTEM_PARAMS: LazyLock<SystemParams> = LazyLock::new(|| {
-    crate::deserialize(&SystemParams::SYSTEM_HARDCODED).expect("valid hardcoded params")
-});
+static SYSTEM_PARAMS: LazyLock<SystemParams> =
+    LazyLock::new(|| crate::deserialize::<SystemParams>(&SystemParams::SYSTEM_HARDCODED).unwrap());
 
 #[derive(Copy, Clone, PartialEq, Eq, Serialize, Deserialize, PartialDefault)]
 pub struct SystemParams {
@@ -80,7 +79,6 @@ impl ProfileKeyEncryptionDomain {
         let (mask, candidates) = M4.decode_253_bits();
 
         let target_M3 = key_pair.a1.invert() * ciphertext.as_points()[0];
-        let seed_sho = profile_key_struct::ProfileKeyStruct::seed_M3();
 
         let mut retval: profile_key_struct::ProfileKeyStruct = PartialDefault::partial_default();
         let mut n_found = 0;
@@ -99,8 +97,7 @@ impl ProfileKeyEncryptionDomain {
                 if (j & 1) == 1 {
                     pk[31] |= 0x40;
                 }
-                let M3 =
-                    profile_key_struct::ProfileKeyStruct::calc_M3(seed_sho.clone(), pk, uid_bytes);
+                let M3 = profile_key_struct::ProfileKeyStruct::calc_M3(pk, uid_bytes);
                 let candidate_retval = profile_key_struct::ProfileKeyStruct { bytes: pk, M3, M4 };
                 let found = M3.ct_eq(&target_M3) & is_valid_fe;
                 retval.conditional_assign(&candidate_retval, found);

@@ -8,11 +8,18 @@ package org.signal.libsignal.net;
 import java.time.Duration;
 import java.util.Set;
 import java.util.function.LongToIntFunction;
+import org.signal.libsignal.internal.CalledFromNative;
 import org.signal.libsignal.internal.Native;
 import org.signal.libsignal.internal.NativeHandleGuard;
 
 /** The state of a registration verification session as reported by the server. */
 public class RegistrationSessionState extends NativeHandleGuard.SimpleOwner {
+  @CalledFromNative
+  public static enum RequestedInformation {
+    PUSH_CHALLENGE,
+    CAPTCHA;
+  }
+
   RegistrationSessionState(long nativeHandle) {
     super(nativeHandle);
   }
@@ -59,9 +66,9 @@ public class RegistrationSessionState extends NativeHandleGuard.SimpleOwner {
   }
 
   /** Requested information that needs to be submitted before requesting code delivery. */
-  public Set<ChallengeOption> getRequestedInformation() {
+  public Set<RequestedInformation> getRequestedInformation() {
     return Set.of(
-        (ChallengeOption[]) guardedMap(Native::RegistrationSession_GetRequestedInformation));
+        (RequestedInformation[]) guardedMap(Native::RegistrationSession_GetRequestedInformation));
   }
 
   private Duration ofOptionalDurationSeconds(LongToIntFunction getter) {

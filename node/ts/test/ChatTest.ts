@@ -8,23 +8,21 @@ import {
   Server,
   loadCertificates,
 } from '@signalapp/mock-server';
+import * as os from 'os';
 import { config, expect, use } from 'chai';
-import chaiAsPromised from 'chai-as-promised';
-import sinon from 'sinon';
-import sinonChai from 'sinon-chai';
-import { Buffer } from 'node:buffer';
-import { randomBytes } from 'node:crypto';
-import * as os from 'node:os';
-import * as path from 'node:path';
-
-import * as util from './util.js';
+import * as chaiAsPromised from 'chai-as-promised';
+import * as sinon from 'sinon';
+import * as sinonChai from 'sinon-chai';
+import * as util from './util';
 import {
   ChatConnection,
   ChatServerMessageAck,
   ChatServiceListener,
   ConnectionEventsListener,
   Net,
-} from '../net.js';
+} from '../net';
+import { randomBytes } from 'crypto';
+import * as path from 'path';
 
 use(chaiAsPromised);
 use(sinonChai);
@@ -96,7 +94,6 @@ describe('chat connection to mock server', () => {
       TESTING_localServer_chatPort: port,
       TESTING_localServer_cdsiPort: port,
       TESTING_localServer_svr2Port: port,
-      TESTING_localServer_svrBPort: port,
       TESTING_localServer_rootCertificateDer: pemToDer(certificateAuthority),
     });
   });
@@ -128,7 +125,7 @@ describe('chat connection to mock server', () => {
       async (listener: ConnectionEventsListener | ChatServiceListener) => {
         const serviceListener = {
           onIncomingMessage: (
-            _envelope: Uint8Array,
+            _envelope: Buffer,
             _timestamp: number,
             _ack: ChatServerMessageAck
           ) => {},
@@ -166,7 +163,7 @@ describe('chat connection to mock server', () => {
 
       await chat.disconnect();
       await onDisconnected;
-      expect(onDisconnected.resolvedValue).to.be.a('null');
+      expect(onDisconnected.resolvedValue).to.be.null;
     });
   });
 
@@ -188,7 +185,7 @@ describe('chat connection to mock server', () => {
               void promisedAlerts.resolve(alerts);
             },
             onIncomingMessage: (
-              _envelope: Uint8Array,
+              _envelope: Buffer,
               _timestamp: number,
               _ack: ChatServerMessageAck
             ) => {},

@@ -6,14 +6,14 @@
 //! Provides BackupAuthCredential and related types.
 //!
 //! BackupAuthCredential is a MAC over:
-//! - a backup-id (a 16-byte value deterministically derived from the client's account entropy pool, blinded at issuance, revealed for verification)
+//! - a backup-id (a 16-byte value deterministically derived from the client's master key, blinded at issuance, revealed for verification)
 //! - a timestamp, truncated to day granularity (chosen by the chat server at issuance, passed publicly to the verifying server)
 //! - a receipt level (chosen by the chat server at issuance, passed publicly to the verifying server)
 //!
 //! The BackupAuthCredentialPresentation includes the public backup-id in the clear for verification
 //!
 //! The BackupAuthCredential has the additional constraint that it should be deterministically reproducible. Rather than a randomly
-//! seeded blinding key pair, the key pair is derived from, you guessed it, the client's AEP.
+//! seeded blinding key pair, the key pair is derived from, you guessed it, the client's master key.
 
 use curve25519_dalek_signal::ristretto::RistrettoPoint;
 use partial_default::PartialDefault;
@@ -24,7 +24,7 @@ use crate::common::serialization::ReservedByte;
 use crate::common::sho::Sho;
 use crate::common::simple_types::*;
 use crate::generic_server_params::{GenericServerPublicParams, GenericServerSecretParams};
-use crate::{ZkGroupDeserializationFailure, ZkGroupVerificationFailure};
+use crate::{ZkGroupDeserializationFailure, ZkGroupVerificationFailure, SECONDS_PER_DAY};
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
 struct BackupIdPoint(RistrettoPoint);
@@ -107,7 +107,7 @@ impl TryFrom<u64> for BackupCredentialType {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialDefault)]
+#[derive(Serialize, Deserialize, PartialDefault)]
 pub struct BackupAuthCredentialRequestContext {
     reserved: ReservedByte,
     blinded_backup_id: zkcredential::issuance::blind::BlindedPoint,
@@ -150,7 +150,7 @@ impl BackupAuthCredentialRequestContext {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialDefault)]
+#[derive(Serialize, Deserialize, PartialDefault)]
 pub struct BackupAuthCredentialRequest {
     reserved: ReservedByte,
     blinded_backup_id: zkcredential::issuance::blind::BlindedPoint,
@@ -181,7 +181,7 @@ impl BackupAuthCredentialRequest {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialDefault)]
+#[derive(Serialize, Deserialize, PartialDefault)]
 pub struct BackupAuthCredentialResponse {
     reserved: ReservedByte,
     // In theory, we don't need to store this (AuthCredentialResponse doesn't),
@@ -227,7 +227,7 @@ impl BackupAuthCredentialRequestContext {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialDefault)]
+#[derive(Serialize, Deserialize, PartialDefault)]
 pub struct BackupAuthCredential {
     reserved: ReservedByte,
     redemption_time: Timestamp,
@@ -268,7 +268,7 @@ impl BackupAuthCredential {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialDefault)]
+#[derive(Serialize, Deserialize, PartialDefault)]
 pub struct BackupAuthCredentialPresentation {
     version: ReservedByte,
     backup_level: BackupLevel,
@@ -284,10 +284,18 @@ impl BackupAuthCredentialPresentation {
         current_time: Timestamp,
         server_params: &GenericServerSecretParams,
     ) -> Result<(), ZkGroupVerificationFailure> {
-        crate::ServerSecretParams::check_auth_credential_redemption_time(
-            self.redemption_time,
-            current_time,
-        )?;
+        let acceptable_start_time = self
+            .redemption_time
+            .checked_sub_seconds(SECONDS_PER_DAY)
+            .ok_or(ZkGroupVerificationFailure)?;
+        let acceptable_end_time = self
+            .redemption_time
+            .checked_add_seconds(2 * SECONDS_PER_DAY)
+            .ok_or(ZkGroupVerificationFailure)?;
+
+        if !(acceptable_start_time..=acceptable_end_time).contains(&current_time) {
+            return Err(ZkGroupVerificationFailure);
+        }
 
         zkcredential::presentation::PresentationProofVerifier::new(CREDENTIAL_LABEL)
             .add_public_attribute(&self.redemption_time)
@@ -316,7 +324,7 @@ mod tests {
     use assert_matches::assert_matches;
 
     use super::*;
-    use crate::{RANDOMNESS_LEN, RandomnessBytes, SECONDS_PER_DAY, Timestamp, common};
+    use crate::{common, RandomnessBytes, Timestamp, RANDOMNESS_LEN, SECONDS_PER_DAY};
 
     const DAY_ALIGNED_TIMESTAMP: Timestamp = Timestamp::from_epoch_seconds(1681344000); // 2023-04-13 00:00:00 UTC
     const KEY: libsignal_account_keys::BackupKey = libsignal_account_keys::BackupKey([0x42u8; 32]);

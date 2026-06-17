@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 use boring_signal::ssl::SslVersion;
 
-use crate::Alpn;
 use crate::certs::RootCertificates;
 use crate::host::Host;
 use crate::route::{ReplaceFragment, RouteProvider, RouteProviderContext, SimpleRoute};
+use crate::Alpn;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TlsRouteFragment {
@@ -64,10 +64,10 @@ pub(crate) trait SetAlpn {
 impl<P: RouteProvider> RouteProvider for TlsRouteProvider<P> {
     type Route = TlsRoute<P::Route>;
 
-    fn routes<'s, C: RouteProviderContext>(
+    fn routes<'s>(
         &'s self,
-        context: &mut C,
-    ) -> impl Iterator<Item = Self::Route> + use<'s, C, P> {
+        context: &impl RouteProviderContext,
+    ) -> impl Iterator<Item = Self::Route> + 's {
         let Self {
             sni,
             certs,

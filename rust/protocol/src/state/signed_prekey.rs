@@ -9,7 +9,7 @@ use std::fmt;
 use prost::Message;
 
 use crate::proto::storage::SignedPreKeyRecordStructure;
-use crate::{KeyPair, PrivateKey, PublicKey, Result, SignalProtocolError, Timestamp, kem};
+use crate::{kem, KeyPair, PrivateKey, PublicKey, Result, SignalProtocolError, Timestamp};
 
 /// A unique identifier selecting among this client's known signed pre-keys.
 #[derive(

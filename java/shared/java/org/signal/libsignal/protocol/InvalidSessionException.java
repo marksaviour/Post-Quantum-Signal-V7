@@ -9,8 +9,4 @@ public class InvalidSessionException extends IllegalStateException {
   public InvalidSessionException(String detailMessage) {
     super(detailMessage);
   }
-
-  public InvalidSessionException(String detailMessage, Throwable cause) {
-    super(detailMessage, cause);
-  }
 }

@@ -102,7 +102,6 @@ impl ClientConnectionEstablishment {
             Box::new(snow_resolver::Resolver),
         )
         .remote_public_key(&trusted_public_key[..])
-        .expect("not called previously")
         .build_initiator()?;
         let payload = trusted_code_hashes.concat();
         let mut initial_message =

@@ -6,11 +6,10 @@
 use bytes::Bytes;
 use http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use libsignal_bridge_macros::*;
-use libsignal_bridge_types::net::TokioAsyncContext;
 use libsignal_bridge_types::net::chat::{
-    AuthenticatedChatConnection, ChatListener, HttpRequest, ProvisioningChatConnection,
-    ProvisioningListener, UnauthenticatedChatConnection,
+    AuthenticatedChatConnection, ChatListener, HttpRequest, UnauthenticatedChatConnection,
 };
+use libsignal_bridge_types::net::TokioAsyncContext;
 use libsignal_net::chat::fake::FakeChatRemote;
 use libsignal_net::chat::{
     ConnectError, RequestProto, Response as ChatResponse, ResponseProto, SendError,
@@ -32,12 +31,20 @@ pub struct FakeChatServer {
 
 pub struct FakeChatRemoteEnd(FakeChatRemote);
 
+pub struct FakeChatSentRequest {
+    // Hold as an Option so that the value can be taken.
+    http: Option<HttpRequest>,
+    id: u64,
+}
+
 pub struct FakeChatResponse(ResponseProto);
 
 bridge_as_handle!(FakeChatConnection);
 bridge_handle_fns!(FakeChatConnection, clone = false);
 bridge_as_handle!(FakeChatRemoteEnd);
 bridge_handle_fns!(FakeChatRemoteEnd, clone = false);
+bridge_as_handle!(FakeChatSentRequest, mut = true);
+bridge_handle_fns!(FakeChatSentRequest, clone = false);
 bridge_as_handle!(FakeChatServer);
 bridge_handle_fns!(FakeChatServer, clone = false);
 bridge_as_handle!(FakeChatResponse);
@@ -79,24 +86,8 @@ fn TESTING_FakeChatConnection_Create(
     let alerts = alerts_joined_by_newlines.split_terminator('\n');
     let (chat, remote) = libsignal_bridge_types::net::chat::FakeChatConnection::new(
         tokio.handle(),
-        listener.into_event_listener(),
+        listener,
         alerts,
-    );
-    FakeChatConnection {
-        chat: Some(chat).into(),
-        remote_end: Some(remote).into(),
-    }
-}
-
-#[bridge_fn]
-fn TESTING_FakeChatConnection_CreateProvisioning(
-    tokio: &TokioAsyncContext,
-    listener: Box<dyn ProvisioningListener>,
-) -> FakeChatConnection {
-    let (chat, remote) = libsignal_bridge_types::net::chat::FakeChatConnection::new(
-        tokio.handle(),
-        listener.into_event_listener(),
-        vec![],
     );
     FakeChatConnection {
         chat: Some(chat).into(),
@@ -118,14 +109,6 @@ fn TESTING_FakeChatConnection_TakeUnauthenticatedChat(
 ) -> UnauthenticatedChatConnection {
     let chat = chat.chat.lock().expect("not poisoned").take();
     chat.expect("can't take chat twice").into_unauthenticated()
-}
-
-#[bridge_fn]
-fn TESTING_FakeChatConnection_TakeProvisioningChat(
-    chat: &FakeChatConnection,
-) -> ProvisioningChatConnection {
-    let chat = chat.chat.lock().expect("not poisoned").take();
-    chat.expect("can't take chat twice").into_provisioning()
 }
 
 #[bridge_fn]
@@ -169,7 +152,7 @@ fn TESTING_FakeChatRemoteEnd_InjectConnectionInterrupted(chat: &FakeChatRemoteEn
 #[bridge_io(TokioAsyncContext)]
 async fn TESTING_FakeChatRemoteEnd_ReceiveIncomingRequest(
     chat: &FakeChatRemoteEnd,
-) -> Option<(HttpRequest, u64)> {
+) -> Option<FakeChatSentRequest> {
     let request = chat
         .0
         .receive_request()
@@ -200,7 +183,20 @@ async fn TESTING_FakeChatRemoteEnd_ReceiveIncomingRequest(
             .into(),
     };
 
-    Some((http_request, id.unwrap()))
+    Some(FakeChatSentRequest {
+        http: Some(http_request),
+        id: id.unwrap(),
+    })
+}
+
+#[bridge_fn]
+fn TESTING_FakeChatSentRequest_TakeHttpRequest(request: &mut FakeChatSentRequest) -> HttpRequest {
+    request.http.take().expect("not taken yet")
+}
+
+#[bridge_fn]
+fn TESTING_FakeChatSentRequest_RequestId(request: &FakeChatSentRequest) -> u64 {
+    request.id
 }
 
 #[bridge_fn]
@@ -288,8 +284,6 @@ make_error_testing_enum! {
         AllAttemptsFailed => AllAttemptsFailed,
         InvalidConnectionConfiguration => InvalidConnectionConfiguration,
         RetryLater => RetryAfter42Seconds,
-        ;
-        PossibleCaptiveNetwork,
     }
 }
 
@@ -314,16 +308,6 @@ fn TESTING_ChatConnectErrorConvert(
         TestingChatConnectError::RetryAfter42Seconds => ConnectError::RetryLater(RetryLater {
             retry_after_seconds: 42,
         }),
-        TestingChatConnectError::PossibleCaptiveNetwork => {
-            ConnectError::WebSocket(libsignal_net::infra::ws::WebSocketConnectError::Transport(
-                libsignal_net::infra::errors::TransportConnectError::SslFailedHandshake(
-                    libsignal_net::infra::errors::FailedHandshakeReason::Cert {
-                        error: boring_signal::x509::X509VerifyError::SELF_SIGNED_CERT_IN_CHAIN,
-                        cert_hashes: vec![],
-                    },
-                ),
-            ))
-        }
     })
 }
 
@@ -350,7 +334,7 @@ fn TESTING_ChatSendErrorConvert(
         TestingChatSendError::ConnectionInvalidated => SendError::ConnectionInvalidated,
         TestingChatSendError::ConnectedElsewhere => SendError::ConnectedElsewhere,
         TestingChatSendError::WebSocketConnectionReset => {
-            SendError::WebSocket(libsignal_net::infra::ws::WebSocketError::Io(
+            SendError::WebSocket(libsignal_net::infra::ws::WebSocketServiceError::Io(
                 std::io::ErrorKind::ConnectionReset.into(),
             ))
         }

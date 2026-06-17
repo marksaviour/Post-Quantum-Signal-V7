@@ -3,18 +3,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import { randomBytes } from 'node:crypto';
-import * as Native from '../../Native.js';
-import { RANDOM_LENGTH } from '../internal/Constants.js';
+import { randomBytes } from 'crypto';
+import * as Native from '../../../Native';
+import { RANDOM_LENGTH } from '../internal/Constants';
 
-import ServerSecretParams from '../ServerSecretParams.js';
-import GroupPublicParams from '../groups/GroupPublicParams.js';
+import ServerSecretParams from '../ServerSecretParams';
+import GroupPublicParams from '../groups/GroupPublicParams';
 
-import ExpiringProfileKeyCredentialResponse from './ExpiringProfileKeyCredentialResponse.js';
-import ProfileKeyCommitment from './ProfileKeyCommitment.js';
-import ProfileKeyCredentialPresentation from './ProfileKeyCredentialPresentation.js';
-import ProfileKeyCredentialRequest from './ProfileKeyCredentialRequest.js';
-import { Aci } from '../../Address.js';
+import ExpiringProfileKeyCredentialResponse from './ExpiringProfileKeyCredentialResponse';
+import ProfileKeyCommitment from './ProfileKeyCommitment';
+import ProfileKeyCredentialPresentation from './ProfileKeyCredentialPresentation';
+import ProfileKeyCredentialRequest from './ProfileKeyCredentialRequest';
+import { Aci } from '../../Address';
 
 export default class ServerZkProfileOperations {
   serverSecretParams: ServerSecretParams;
@@ -41,7 +41,7 @@ export default class ServerZkProfileOperations {
   }
 
   issueExpiringProfileKeyCredentialWithRandom(
-    random: Uint8Array,
+    random: Buffer,
     profileKeyCredentialRequest: ProfileKeyCredentialRequest,
     userId: Aci,
     profileKeyCommitment: ProfileKeyCommitment,

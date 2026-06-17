@@ -12,7 +12,7 @@ use signal_neon_futures::ChannelEx;
 
 use super::*;
 use crate::support::{
-    AsyncRuntime, AsyncRuntimeBase, CancellationId, ResultReporter, describe_panic,
+    describe_panic, AsyncRuntime, AsyncRuntimeBase, CancellationId, ResultReporter,
 };
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -23,6 +23,7 @@ pub struct CancellationError;
 pub struct PromiseSettler<T, E> {
     deferred: Deferred,
     channel: Channel,
+    error_module: Root<JsObject>,
     node_function_name: &'static str,
     complete_signature: PhantomData<fn(Result<T, E>)>,
 }
@@ -42,9 +43,14 @@ where
         node_function_name: &'static str,
     ) -> Self {
         let channel = cx.channel();
+        let error_module = cx
+            .this::<JsObject>()
+            .expect("'this' is the module containing errors, which is a valid object")
+            .root(cx);
         Self {
             deferred,
             channel,
+            error_module,
             node_function_name,
             complete_signature: PhantomData,
         }
@@ -90,6 +96,7 @@ where
         let PromiseSettler {
             deferred,
             channel,
+            error_module,
             node_function_name,
             complete_signature: _,
         } = receiver;
@@ -98,6 +105,7 @@ where
             // Finalize all the extra args and unwrap our globals before anything else, so we don't
             // leak anything.
             extra_args_to_finalize.finalize(&mut cx);
+            let error_module = error_module.into_inner(&mut cx);
 
             // If we didn't panic during execution of the future, we can convert the result to a
             // JavaScript value or error. But we might panic during *that* operation, so we'll run
@@ -116,12 +124,16 @@ where
                             Ok(success.convert_into(*cx)?.upcast())
                         }),
                         Ok(Err(failure)) => {
-                            let throwable = failure.into_throwable(*cx, node_function_name);
+                            let throwable =
+                                failure.into_throwable(*cx, error_module, node_function_name);
                             Ok(cx.throw(throwable))
                         }
                         Err(CancellationError) => {
-                            let throwable =
-                                CancellationError.into_throwable(*cx, node_function_name);
+                            let throwable = CancellationError.into_throwable(
+                                *cx,
+                                error_module,
+                                node_function_name,
+                            );
                             Ok(cx.throw(throwable))
                         }
                     }
@@ -185,7 +197,7 @@ where
 {
     let (deferred, promise) = cx.promise();
     let completer = PromiseSettler::new(cx, deferred, node_function_name);
-    let cancellation_token = runtime.run_future(future, completer, node_function_name);
+    let cancellation_token = runtime.run_future(future, completer);
     if cancellation_token != CancellationId::NotSupported {
         let js_cancellation_token = JsBigInt::from_u64(cx, cancellation_token.into());
         promise.set(cx, "_cancellationToken", js_cancellation_token)?;
@@ -254,7 +266,6 @@ where
         &self,
         make_future: impl FnOnce(Self::Cancellation) -> F,
         completer: <F::Output as ResultReporter>::Receiver,
-        _label: &'static str,
     ) -> CancellationId {
         // Because we're on the JS main thread, we don't need `future` to be Send; it will only be
         // run synchronously with other JS tasks by the Node microtask queue.

@@ -1,5 +1,3 @@
-> **📣 If you were previously using libsignal from Maven or Gradle, our repository location has changed with the 0.86.6 release. See below for more information.**
-
 # Overview
 
 libsignal contains platform-agnostic APIs used by the official Signal clients and servers, exposed
@@ -45,15 +43,15 @@ increases to the minimum supported tools versions.
 
 ### Toolchain Installation
 
-To build anything in this repository you must have [Rust](https://rust-lang.org) installed, as well
-as recent versions of Clang, libclang, [CMake](https://cmake.org), Make, protoc, Python (3.9+), and git.
+To build anything in this repository you must have [Rust](https://rust-lang.org) installed,
+as well as Clang, libclang, [CMake](https://cmake.org), Make, protoc, and git.
 
 #### Linux/Debian
 
 On a Debian-like system, you can get these extra dependencies through `apt`:
 
 ```shell
-$ apt-get install clang libclang-dev cmake make protobuf-compiler libprotobuf-dev python3 git
+$ apt-get install clang libclang-dev cmake make protobuf-compiler git
 ```
 
 #### macOS
@@ -90,13 +88,12 @@ You should always install any Rust tools you need that may affect the build from
 package manager (e.g. `apt` or `brew`). Package managers sometimes contain outdated versions of these tools that can break
 the build with incompatibility issues (especially cbindgen).
 
-To install the main Rust extra dependencies matching the versions we use, you can run the following commands:
+To install the main Rust extra dependencies matching the versions we use, you can run the following commands: 
 
 ```shell
-$ cargo +stable install --version "$(cat .cbindgen-version)" --locked cbindgen
-$ cargo +stable install --version "$(cat acknowledgments/cargo-about-version)" --locked cargo-about
-$ cargo +stable install --version "$(cat .taplo-cli-version)" --locked taplo-cli
-$ cargo +stable install cargo-fuzz
+$ cargo +stable install cbindgen cargo-fuzz
+$ cargo +stable install --version "$(cat ../acknowledgments/cargo-about-version)" --locked cargo-about
+$ cargo +stable install --version "$(cat ../.taplo-cli-version)" --locked taplo-cli
 ```
 
 ## Java/Android
@@ -147,25 +144,13 @@ $ make
 When exposing new APIs to Java, you will need to run `rust/bridge/jni/bin/gen_java_decl.py` in
 addition to rebuilding. This requires installing the `cbindgen` Rust tool, as detailed above. 
 
-### Use as a library
+### Maven Central
 
-Signal publishes Java packages for its own use, under the names org.signal:libsignal-server,
-org.signal:libsignal-client, and org.signal:libsignal-android. libsignal-client and libsignal-server
-contain native libraries for Debian-flavored x86_64 Linux as well as Windows (x86_64) and macOS
-(x86_64 and arm64). libsignal-android contains native libraries for armeabi-v7a, arm64-v8a, x86, and
-x86_64 Android. These are located in a Maven repository at
-https://build-artifacts.signal.org/libraries/maven/; for use from Gradle, add the following to your
-`repositories` block:
-
-```
-maven {
-  name = "SignalBuildArtifacts"
-  // The "uri()" part is only necessary for Kotlin Gradle; Groovy Gradle accepts a bare string here.
-  url = uri("https://build-artifacts.signal.org/libraries/maven/")
-}
-```
-
-Older builds were published to [Maven Central](https://central.sonatype.org) instead.
+Signal publishes Java packages on [Maven Central](https://central.sonatype.org) for its own use,
+under the names org.signal:libsignal-server, org.signal:libsignal-client, and
+org.signal:libsignal-android. libsignal-client and libsignal-server contain native libraries for
+Debian-flavored x86_64 Linux as well as Windows (x86_64) and macOS (x86_64 and arm64).
+libsignal-android contains native libraries for armeabi-v7a, arm64-v8a, x86, and x86_64 Android.
 
 When building for Android you need *both* libsignal-android and libsignal-client, but the Windows
 and macOS libraries in libsignal-client won't automatically be excluded from your final app. You can
@@ -186,12 +171,6 @@ android {
 You can additionally exclude `libsignal_jni_testing.so` if you do not plan to use any of the APIs
 intended for client testing.
 
-### Testing a local build with Signal-Android
-
-The Signal-Android gradle.properties file has a commented-out line to include libsignal as part of the build. Uncomment that and adjust the path; optionally, you can restrict the architectures you want to build for by adding `androidArchs=aarch64` to *libsignal's* gradle.properties. (The set of recognized architectures is in java/build_jni.sh.) If you're using an IDE, you'll need to re-import the Gradle structure at this point. When you're done, revert the changes to the Android app's gradle.properties and re-import once more.
-
-Note that this does not import the *Rust* parts of the project into the IDE. Doing that in a multi-language IDE like IDEA is possible, but finicky; as of 2025 the most reliable way to do it is to open the Android project first, add the libsignal repo root directory as a Rust project second (only including the top-level directory), and only then make the changes to gradle.properties.
-
 
 ## Swift
 
@@ -203,13 +182,13 @@ To learn about the Swift build process see [``swift/README.md``](swift/)
 You'll need Node installed to build. If you have [nvm][], you can run `nvm use` to select an
 appropriate version automatically.
 
-We use `npm` as our package manager, and a Python script to control building the Rust library, accessible as `npm run build`.
+We use `npm` as our package manager, and `node-gyp` to control building the Rust library.
 
 ```shell
 $ cd node
 $ nvm use
 $ npm install
-$ npm run build
+$ npx node-gyp rebuild  # clean->configure->build
 $ npm run tsc
 $ npm run test
 ```
@@ -227,10 +206,6 @@ Signal publishes the NPM package `@signalapp/libsignal-client` for its own use, 
 libraries for Windows, macOS, and Debian-flavored Linux. Both x64 and arm64 builds are included for
 all three platforms, but the arm64 builds for Windows and Linux are considered experimental, since
 there are no official builds of Signal for those architectures.
-
-### Testing a local build with Signal-Desktop
-
-After running all the build commands above, adjust the `@signalapp/libsignal-client` dependency in the Desktop app's package.json to "link:path/to/libsignal/node" and run `pnpm install`. When you're done, revert the changes to package.json and run `pnpm install` again.
 
 
 # Contributions
@@ -278,6 +253,6 @@ Administration Regulations, Section 740.13) for both object code and source code
 
 ## License
 
-Copyright 2020-2026 Signal Messenger, LLC
+Copyright 2020-2024 Signal Messenger, LLC
 
 Licensed under the GNU AGPLv3: https://www.gnu.org/licenses/agpl-3.0.html

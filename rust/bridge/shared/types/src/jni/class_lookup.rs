@@ -2,8 +2,8 @@
 // Copyright 2024 Signal Messenger, LLC.
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-use jni::JNIEnv;
 use jni::objects::{GlobalRef, JClass, JMethodID, JObject, JValue};
+use jni::JNIEnv;
 use libsignal_core::try_scoped;
 use once_cell::sync::OnceCell;
 
@@ -38,9 +38,8 @@ pub fn save_class_loader(
         )?;
 
         try_scoped(|| {
-            let loader_class = env.get_object_class(&loader)?;
             let load_class_method = env.get_method_id(
-                loader_class,
+                jni_class_name!(java.lang.ClassLoader),
                 "loadClass",
                 jni_signature!((java.lang.String) -> java.lang.Class),
             )?;
@@ -120,19 +119,6 @@ fn real_jni_find_class<'output>(
     name: &str,
 ) -> Result<JClass<'output>, jni::errors::Error> {
     env.find_class(name)
-}
-
-/// Equivalent to [`JNIEnv::find_class`], but only intended for use with primitive arrays (specified
-/// using [`jni_signature`]).
-///
-/// Use [`find_class`] for actual classes, and, uh, nothing has been built yet for arrays of
-/// classes.
-#[inline]
-pub fn find_primitive_array_class<'output>(
-    env: &mut JNIEnv<'output>,
-    name: &str,
-) -> Result<JClass<'output>, jni::errors::Error> {
-    real_jni_find_class(env, name)
 }
 
 fn jni_name_from_binary_name(ClassName(name): ClassName<'_>) -> String {

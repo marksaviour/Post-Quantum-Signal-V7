@@ -11,12 +11,12 @@ use futures_util::StreamExt;
 use libsignal_net::infra::certs::RootCertificates;
 use libsignal_net::infra::dns::custom_resolver::DnsTransport;
 use libsignal_net::infra::dns::dns_lookup::DnsLookupRequest;
-use libsignal_net::infra::dns::dns_transport_doh::DohTransportConnector;
 use libsignal_net::infra::host::Host;
-use libsignal_net::infra::route::{
-    HttpRouteFragment, HttpVersion, HttpsTlsRoute, NoDelay, TcpRoute, TlsRoute, TlsRouteFragment,
+use libsignal_net_infra::dns::dns_transport_doh::DohTransportConnector;
+use libsignal_net_infra::route::{
+    HttpRouteFragment, HttpsTlsRoute, NoDelay, TcpRoute, TlsRoute, TlsRouteFragment,
 };
-use libsignal_net::infra::{Alpn, OverrideNagleAlgorithm};
+use libsignal_net_infra::Alpn;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -36,10 +36,9 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::new()
+    let _ = env_logger::builder()
         .filter_level(log::LevelFilter::Debug)
-        .parse_default_env()
-        .init();
+        .try_init();
 
     let args = Args::parse();
     let address = args.ns_address;
@@ -49,7 +48,6 @@ async fn main() {
         fragment: HttpRouteFragment {
             host_header: host.clone(),
             path_prefix: "".into(),
-            http_version: Some(HttpVersion::Http2),
             front_name: None,
         },
         inner: TlsRoute {
@@ -62,7 +60,6 @@ async fn main() {
             inner: TcpRoute {
                 address,
                 port: args.ns_port,
-                override_nagle_algorithm: OverrideNagleAlgorithm::UseSystemDefault,
             },
         },
     };
@@ -72,8 +69,8 @@ async fn main() {
         NoDelay,
         DohTransportConnector::default(),
         (),
-        "dns_over_https",
-        |_| libsignal_net_infra::route::ErrorHandling::Continue::<std::convert::Infallible>,
+        "dns_over_https".into(),
+        |_| std::ops::ControlFlow::Continue::<std::convert::Infallible>(()),
     )
     .await
     .0

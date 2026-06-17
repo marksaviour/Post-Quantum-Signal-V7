@@ -8,11 +8,11 @@ use libsignal_bridge_types::io::{AsyncInput, InputStream};
 use libsignal_bridge_types::support::*;
 use libsignal_bridge_types::*;
 use libsignal_message_backup::backup::Purpose;
-use libsignal_message_backup::{BackupReader, FoundUnknownField, ReadError, ReadResult};
+use libsignal_message_backup::{BackupReader, ReadError, ReadResult};
 
 pub struct ComparableBackup {
-    backup: libsignal_message_backup::backup::serialize::Backup,
-    found_unknown_fields: Vec<FoundUnknownField>,
+    pub backup: libsignal_message_backup::backup::serialize::Backup,
+    pub found_unknown_fields: Vec<libsignal_message_backup::FoundUnknownField>,
 }
 
 bridge_as_handle!(ComparableBackup);

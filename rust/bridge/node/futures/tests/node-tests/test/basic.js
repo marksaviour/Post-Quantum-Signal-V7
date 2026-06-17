@@ -5,13 +5,12 @@
 
 /* eslint-env es2017 */
 
-import { use, assert } from 'chai';
-import chaiAsPromised from 'chai-as-promised';
-import { createRequire } from 'node:module';
+const chai = require('chai');
+const chaiAsPromised = require('chai-as-promised');
 
-use(chaiAsPromised);
+const { assert, expect } = chai;
+chai.use(chaiAsPromised);
 
-const require = createRequire(import.meta.url)
 const native = require(process.env.SIGNAL_NEON_FUTURES_TEST_LIB);
 
 function promisify(operation) {

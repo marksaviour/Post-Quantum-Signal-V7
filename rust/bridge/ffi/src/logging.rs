@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-use std::ffi::{CString, c_char, c_void};
+use std::ffi::{c_char, c_void, CString};
 
 #[repr(C)]
 pub enum LogLevel {
@@ -95,7 +95,7 @@ impl log::Log for FfiLogger {
     }
 }
 
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn signal_init_logger(max_level: LogLevel, logger: FfiLogger) -> bool {
     match log::set_logger(Box::leak(Box::new(logger))) {
         Ok(_) => {

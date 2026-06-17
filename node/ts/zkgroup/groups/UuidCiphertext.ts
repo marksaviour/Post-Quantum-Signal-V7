@@ -3,23 +3,23 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import ByteArray from '../internal/ByteArray.js';
-import * as Native from '../../Native.js';
+import ByteArray from '../internal/ByteArray';
+import * as Native from '../../../Native';
 
 export default class UuidCiphertext extends ByteArray {
   private readonly __type?: never;
 
-  constructor(contents: Uint8Array) {
+  constructor(contents: Buffer) {
     super(contents, Native.UuidCiphertext_CheckValidContents);
   }
 
-  static serializeAndConcatenate(ciphertexts: UuidCiphertext[]): Uint8Array {
+  static serializeAndConcatenate(ciphertexts: UuidCiphertext[]): Buffer {
     if (ciphertexts.length == 0) {
-      return Uint8Array.of();
+      return Buffer.of();
     }
 
     const uuidCiphertextLen = ciphertexts[0].contents.length;
-    const concatenated = new Uint8Array(ciphertexts.length * uuidCiphertextLen);
+    const concatenated = Buffer.alloc(ciphertexts.length * uuidCiphertextLen);
     let offset = 0;
     for (const next of ciphertexts) {
       if (next.contents.length !== uuidCiphertextLen) {

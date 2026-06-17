@@ -12,24 +12,16 @@ use std::ops::{Deref, DerefMut, RangeInclusive};
 use std::slice;
 
 use libsignal_account_keys::{AccountEntropyPool, InvalidAccountEntropyPool};
-use libsignal_message_backup::json::exporter::FrameExportResult as JsonFrameExportResult;
 use neon::prelude::*;
 use neon::types::JsBigInt;
 use paste::paste;
-use zkgroup::ZkGroupDeserializationFailure;
 
 use super::*;
 use crate::io::{InputStream, SyncInputStream};
 use crate::message_backup::MessageBackupValidationOutcome;
-use crate::net::chat::{
-    ChatListener, NodeChatListener, NodeProvisioningListener, ProvisioningListener,
-};
-use crate::protocol::storage::{
-    NodeBridgeKyberPreKeyStore, NodeBridgePreKeyStore, NodeBridgeSignedPreKeyStore,
-};
-use crate::support::{
-    Array, AsType, BridgedCallbacks, FixedLengthBincodeSerializable, Serialized, extend_lifetime,
-};
+use crate::net::chat::ChatListener;
+use crate::node::chat::NodeChatListener;
+use crate::support::{extend_lifetime, Array, AsType, FixedLengthBincodeSerializable, Serialized};
 
 /// Converts arguments from their JavaScript form to their Rust form.
 ///
@@ -194,46 +186,6 @@ where
     }
 }
 
-/// A variation of [`ArgTypeInfo`] for callback results.
-///
-/// All [`SimpleArgTypeInfo`] implementations are reusable for this, but the general [`ArgTypeInfo`]
-/// allows borrowing from the foreign value and a callback result can't do that.
-pub trait CallbackResultTypeInfo: Sized {
-    /// The JavaScript form of the argument (e.g. `JsNumber`).
-    type ResultType: neon::types::Value;
-    /// Converts the data in `foreign` to the Rust type.
-    fn convert_from_callback(
-        cx: &mut FunctionContext,
-        foreign: Handle<Self::ResultType>,
-    ) -> NeonResult<Self>;
-}
-
-impl<T: SimpleArgTypeInfo> CallbackResultTypeInfo for T {
-    type ResultType = T::ArgType;
-
-    fn convert_from_callback(
-        cx: &mut FunctionContext,
-        foreign: Handle<Self::ResultType>,
-    ) -> NeonResult<Self> {
-        Self::convert_from(cx, foreign)
-    }
-}
-
-impl<T: CallbackResultTypeInfo> CallbackResultTypeInfo for Option<T> {
-    type ResultType = JsValue;
-
-    fn convert_from_callback(
-        cx: &mut FunctionContext,
-        foreign: Handle<Self::ResultType>,
-    ) -> NeonResult<Self> {
-        if foreign.downcast::<JsNull, _>(cx).is_ok() {
-            return Ok(None);
-        }
-        let non_optional_value = foreign.downcast_or_throw::<T::ResultType, _>(cx)?;
-        T::convert_from_callback(cx, non_optional_value).map(Some)
-    }
-}
-
 // Implement AsyncArgTypeInfo for a slice of SessionRecords outside of
 // the node_bridge_as_handle macro since we don't want to use async for
 // the HsmEnclave module.
@@ -267,7 +219,6 @@ impl<'a> AsyncArgTypeInfo<'a> for &'a [SessionRecord] {
 /// Converts result values from their Rust form to their JavaScript form.
 ///
 /// `ResultTypeInfo` is used to implement the `bridge_fn` macro, but can also be used outside it.
-/// `ResultTypeInfo` is also used for callback arguments in the `bridge_callback` macro.
 ///
 /// ```no_run
 /// # use libsignal_bridge_types::node::*;
@@ -350,7 +301,7 @@ impl SimpleArgTypeInfo for String {
 }
 
 impl SimpleArgTypeInfo for uuid::Uuid {
-    type ArgType = JsUint8Array;
+    type ArgType = JsBuffer;
     fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
         uuid::Uuid::from_slice(foreign.as_slice(cx))
             .or_else(|_| cx.throw_type_error("UUIDs have 16 bytes"))
@@ -358,7 +309,7 @@ impl SimpleArgTypeInfo for uuid::Uuid {
 }
 
 impl SimpleArgTypeInfo for libsignal_protocol::ServiceId {
-    type ArgType = JsUint8Array;
+    type ArgType = JsBuffer;
     fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
         foreign
             .as_slice(cx)
@@ -373,7 +324,7 @@ impl SimpleArgTypeInfo for libsignal_protocol::ServiceId {
 }
 
 impl SimpleArgTypeInfo for libsignal_protocol::Aci {
-    type ArgType = JsUint8Array;
+    type ArgType = JsBuffer;
     fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
         libsignal_protocol::ServiceId::convert_from(cx, foreign)?
             .try_into()
@@ -382,7 +333,7 @@ impl SimpleArgTypeInfo for libsignal_protocol::Aci {
 }
 
 impl SimpleArgTypeInfo for libsignal_protocol::Pni {
-    type ArgType = JsUint8Array;
+    type ArgType = JsBuffer;
     fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
         libsignal_protocol::ServiceId::convert_from(cx, foreign)?
             .try_into()
@@ -399,39 +350,6 @@ impl SimpleArgTypeInfo for libsignal_core::E164 {
     }
 }
 
-impl CallbackResultTypeInfo for PreKeyRecord {
-    type ResultType = DefaultJsBox<JsBoxContentsFor<PreKeyRecord>>;
-
-    fn convert_from_callback(
-        _cx: &mut FunctionContext,
-        foreign: Handle<Self::ResultType>,
-    ) -> NeonResult<Self> {
-        Ok(foreign.as_inner().0.clone())
-    }
-}
-
-impl CallbackResultTypeInfo for SignedPreKeyRecord {
-    type ResultType = DefaultJsBox<JsBoxContentsFor<SignedPreKeyRecord>>;
-
-    fn convert_from_callback(
-        _cx: &mut FunctionContext,
-        foreign: Handle<Self::ResultType>,
-    ) -> NeonResult<Self> {
-        Ok(foreign.as_inner().0.clone())
-    }
-}
-
-impl CallbackResultTypeInfo for KyberPreKeyRecord {
-    type ResultType = DefaultJsBox<JsBoxContentsFor<KyberPreKeyRecord>>;
-
-    fn convert_from_callback(
-        _cx: &mut FunctionContext,
-        foreign: Handle<Self::ResultType>,
-    ) -> NeonResult<Self> {
-        Ok(foreign.as_inner().0.clone())
-    }
-}
-
 impl SimpleArgTypeInfo for AccountEntropyPool {
     type ArgType = <String as SimpleArgTypeInfo>::ArgType;
     fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
@@ -439,36 +357,6 @@ impl SimpleArgTypeInfo for AccountEntropyPool {
         pool.parse().or_else(|e: InvalidAccountEntropyPool| {
             cx.throw_type_error(format!("bad account entropy pool: {e}"))
         })
-    }
-}
-
-impl SimpleArgTypeInfo for libsignal_net_chat::api::messages::MultiRecipientSendAuthorization {
-    type ArgType = JsValue;
-    fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
-        // If we ever have more than two options, we won't be able to just use null for one of them,
-        // but for now this is convenient.
-        if foreign.is_a::<JsNull, _>(cx) {
-            Ok(Self::Story)
-        } else {
-            let elements = foreign.downcast_or_throw::<JsUint8Array, _>(cx)?;
-            let bytes = elements.as_slice(cx);
-            let token =
-                zkgroup::deserialize(bytes).or_else(|_: ZkGroupDeserializationFailure| {
-                    cx.throw_type_error("bad GroupSendFullToken")
-                })?;
-            Ok(Self::Group(token))
-        }
-    }
-}
-
-// Used for callback results.
-impl SimpleArgTypeInfo for () {
-    type ArgType = JsUndefined;
-    fn convert_from(
-        _cx: &mut FunctionContext,
-        _foreign: Handle<Self::ArgType>,
-    ) -> NeonResult<Self> {
-        Ok(())
     }
 }
 
@@ -480,7 +368,7 @@ impl SimpleArgTypeInfo for bool {
 }
 
 impl SimpleArgTypeInfo for Box<[u8]> {
-    type ArgType = JsUint8Array;
+    type ArgType = JsBuffer;
 
     fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
         Ok(foreign.as_slice(cx).to_vec().into())
@@ -501,47 +389,54 @@ impl SimpleArgTypeInfo for Box<[String]> {
     }
 }
 
-impl SimpleArgTypeInfo for libsignal_net::chat::LanguageList {
-    type ArgType = JsArray;
+impl SimpleArgTypeInfo for libsignal_net::registration::PushTokenType {
+    type ArgType = JsString;
 
     fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
-        let entries = Box::<[String]>::convert_from(cx, foreign)?;
-        libsignal_net::chat::LanguageList::parse(&entries)
-            .or_else(|_| cx.throw_error("invalid language in list"))
+        let s = foreign.value(cx);
+        s.parse()
+            .or_else(|_| cx.throw_type_error(format!("invalid push token type {s:?}")))
     }
 }
 
-impl SimpleArgTypeInfo for libsignal_net_chat::api::registration::CreateSession {
+impl SimpleArgTypeInfo for libsignal_net::registration::CreateSession {
     type ArgType = JsObject;
 
     fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
         let number = foreign.get::<JsString, _, _>(cx, "number")?.value(cx);
+        let push_token = foreign
+            .get_opt::<JsString, _, _>(cx, "push_token")?
+            .map(|s| s.value(cx));
+        let push_token_type = foreign
+            .get_opt(cx, "push_token_type")?
+            .map(|s| SimpleArgTypeInfo::convert_from(cx, s))
+            .transpose()?;
         let mcc = foreign
             .get_opt::<JsString, _, _>(cx, "mcc")?
             .map(|s| s.value(cx));
         let mnc = foreign
             .get_opt::<JsString, _, _>(cx, "mnc")?
             .map(|s| s.value(cx));
-        let push_token = None;
         Ok(Self {
             number,
             push_token,
+            push_token_type,
             mcc,
             mnc,
         })
     }
 }
 
-impl SimpleArgTypeInfo for libsignal_net_chat::api::registration::SignedPreKeyBody<Box<[u8]>> {
+impl SimpleArgTypeInfo for libsignal_net::registration::SignedPreKeyBody<Box<[u8]>> {
     type ArgType = JsObject;
     fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
         let key_id = foreign.get(cx, "keyId")?;
         let key_id = u32::convert_from(cx, key_id)?;
 
-        let public_key: Handle<'_, JsUint8Array> = foreign.get(cx, "publicKey")?;
+        let public_key: Handle<'_, JsBuffer> = foreign.get(cx, "publicKey")?;
         let public_key_bytes = public_key.as_slice(cx).into();
 
-        let signature: Handle<'_, JsUint8Array> = foreign.get(cx, "signature")?;
+        let signature: Handle<'_, JsBuffer> = foreign.get(cx, "signature")?;
         let signature = signature.as_slice(cx).into();
         Ok(Self {
             key_id,
@@ -621,13 +516,13 @@ pub struct AssumedImmutableBuffer<'a> {
 impl<'a> AssumedImmutableBuffer<'a> {
     /// Loads and checksums a slice from `handle`.
     ///
-    /// [A JsUint8Array owns its storage][napi], so it's safe to assume the buffer won't get
+    /// [A JsBuffer owns its storage][napi], so it's safe to assume the buffer won't get
     /// deallocated. What's unsafe is assuming that no one else will modify the buffer while we
     /// have a reference to it, which is why we checksum it. (We can't stop the Rust compiler from
     /// potentially optimizing out that checksum, though.)
     ///
     /// [napi]: https://nodejs.org/api/n-api.html#n_api_napi_get_buffer_info
-    pub fn new<'b>(cx: &impl Context<'b>, handle: Handle<'a, JsUint8Array>) -> Self {
+    pub fn new<'b>(cx: &impl Context<'b>, handle: Handle<'a, JsBuffer>) -> Self {
         let buf = handle.as_slice(cx);
         let extended_lifetime_buffer = if buf.is_empty() {
             &[]
@@ -651,10 +546,10 @@ impl Drop for AssumedImmutableBuffer<'_> {
     }
 }
 
-/// Loads from a JsUint8Array, assuming it won't be mutated while in use.
+/// Loads from a JsBuffer, assuming it won't be mutated while in use.
 /// See [`AssumedImmutableBuffer`].
 impl<'storage, 'context: 'storage> ArgTypeInfo<'storage, 'context> for &'storage [u8] {
-    type ArgType = JsUint8Array;
+    type ArgType = JsBuffer;
     type StoredType = AssumedImmutableBuffer<'context>;
     fn borrow(
         cx: &mut FunctionContext,
@@ -675,7 +570,7 @@ impl<'storage, 'context: 'storage> ArgTypeInfo<'storage, 'context> for &'storage
 /// A `PersistentAssumedImmutableBuffer` **cannot be dropped**; instead, it must be explicitly
 /// finalized in a JavaScript context, as it contains a [`neon::handle::Root`].
 pub struct PersistentAssumedImmutableBuffer {
-    owner: Root<JsUint8Array>,
+    owner: Root<JsBuffer>,
     buffer_start: *const u8,
     buffer_len: usize,
     hash: u64,
@@ -684,13 +579,13 @@ pub struct PersistentAssumedImmutableBuffer {
 impl PersistentAssumedImmutableBuffer {
     /// Establishes a GC root for `buffer`, then loads and checksums a slice from it.
     ///
-    /// [A JsUint8Array owns its storage][napi], so it's safe to assume the buffer won't get
+    /// [A JsBuffer owns its storage][napi], so it's safe to assume the buffer won't get
     /// deallocated. What's unsafe is assuming that no one else will modify the buffer while we
     /// have a reference to it, which is why we checksum it. (We can't stop the Rust compiler from
     /// potentially optimizing out that checksum, though.)
     ///
     /// [napi]: https://nodejs.org/api/n-api.html#n_api_napi_get_buffer_info
-    fn new<'a>(cx: &mut impl Context<'a>, buffer: Handle<JsUint8Array>) -> Self {
+    fn new<'a>(cx: &mut impl Context<'a>, buffer: Handle<JsBuffer>) -> Self {
         let owner = buffer.root(cx);
         let buffer_as_slice = buffer.as_slice(cx);
         let buffer_start = if buffer_as_slice.is_empty() {
@@ -734,10 +629,10 @@ impl Finalize for PersistentAssumedImmutableBuffer {
     }
 }
 
-/// Persists the JsUint8Array, assuming it won't be mutated while in use.
+/// Persists the JsBuffer, assuming it won't be mutated while in use.
 /// See [`PersistentAssumedImmutableBuffer`].
 impl<'a> AsyncArgTypeInfo<'a> for &'a [u8] {
-    type ArgType = JsUint8Array;
+    type ArgType = JsBuffer;
     type StoredType = PersistentAssumedImmutableBuffer;
     fn save_async_arg(
         cx: &mut FunctionContext,
@@ -754,7 +649,7 @@ impl<'a> AsyncArgTypeInfo<'a> for &'a [u8] {
 impl<'storage, 'context: 'storage> ArgTypeInfo<'storage, 'context>
     for crate::support::ServiceIdSequence<'storage>
 {
-    type ArgType = JsUint8Array;
+    type ArgType = JsBuffer;
     type StoredType = AssumedImmutableBuffer<'context>;
     fn borrow(
         cx: &mut FunctionContext,
@@ -769,7 +664,7 @@ impl<'storage, 'context: 'storage> ArgTypeInfo<'storage, 'context>
 
 /// See [`PersistentAssumedImmutableBuffer`].
 impl<'a> AsyncArgTypeInfo<'a> for crate::support::ServiceIdSequence<'a> {
-    type ArgType = JsUint8Array;
+    type ArgType = JsBuffer;
     type StoredType = PersistentAssumedImmutableBuffer;
     fn save_async_arg(
         cx: &mut FunctionContext,
@@ -827,72 +722,42 @@ macro_rules! bridge_trait {
 }
 
 bridge_trait!(IdentityKeyStore);
-// bridge_trait!(PreKeyStore);
+bridge_trait!(PreKeyStore);
 bridge_trait!(SenderKeyStore);
 bridge_trait!(SessionStore);
-// bridge_trait!(SignedPreKeyStore);
-// bridge_trait!(KyberPreKeyStore);
+bridge_trait!(SignedPreKeyStore);
+bridge_trait!(KyberPreKeyStore);
 bridge_trait!(InputStream);
 
-impl<'a> AsyncArgTypeInfo<'a> for &'a mut dyn PreKeyStore {
+impl<'storage, 'context: 'storage> ArgTypeInfo<'storage, 'context> for Box<dyn ChatListener> {
     type ArgType = JsObject;
-    type StoredType = BridgedCallbacks<NodeBridgePreKeyStore>;
+    type StoredType = NodeChatListener;
+
+    fn borrow(
+        cx: &mut FunctionContext<'context>,
+        foreign: Handle<'context, Self::ArgType>,
+    ) -> NeonResult<Self::StoredType> {
+        NodeChatListener::new(cx, foreign)
+    }
+
+    fn load_from(stored: &'storage mut Self::StoredType) -> Self {
+        stored.make_listener()
+    }
+}
+
+impl<'a> AsyncArgTypeInfo<'a> for Box<dyn ChatListener> {
+    type ArgType = JsObject;
+    type StoredType = NodeChatListener;
+
     fn save_async_arg(
         cx: &mut FunctionContext,
         foreign: Handle<Self::ArgType>,
     ) -> NeonResult<Self::StoredType> {
-        Ok(BridgedCallbacks(NodeBridgePreKeyStore::new(cx, foreign)?))
+        NodeChatListener::new(cx, foreign)
     }
+
     fn load_async_arg(stored: &'a mut Self::StoredType) -> Self {
-        stored
-    }
-}
-
-impl<'a> AsyncArgTypeInfo<'a> for &'a mut dyn SignedPreKeyStore {
-    type ArgType = JsObject;
-    type StoredType = BridgedCallbacks<NodeBridgeSignedPreKeyStore>;
-    fn save_async_arg(
-        cx: &mut FunctionContext,
-        foreign: Handle<Self::ArgType>,
-    ) -> NeonResult<Self::StoredType> {
-        Ok(BridgedCallbacks(NodeBridgeSignedPreKeyStore::new(
-            cx, foreign,
-        )?))
-    }
-    fn load_async_arg(stored: &'a mut Self::StoredType) -> Self {
-        stored
-    }
-}
-
-impl<'a> AsyncArgTypeInfo<'a> for &'a mut dyn KyberPreKeyStore {
-    type ArgType = JsObject;
-    type StoredType = BridgedCallbacks<NodeBridgeKyberPreKeyStore>;
-    fn save_async_arg(
-        cx: &mut FunctionContext,
-        foreign: Handle<Self::ArgType>,
-    ) -> NeonResult<Self::StoredType> {
-        Ok(BridgedCallbacks(NodeBridgeKyberPreKeyStore::new(
-            cx, foreign,
-        )?))
-    }
-    fn load_async_arg(stored: &'a mut Self::StoredType) -> Self {
-        stored
-    }
-}
-
-impl SimpleArgTypeInfo for Box<dyn ChatListener> {
-    type ArgType = JsObject;
-
-    fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
-        Ok(Box::new(NodeChatListener::new(cx, foreign)?))
-    }
-}
-
-impl SimpleArgTypeInfo for Box<dyn ProvisioningListener> {
-    type ArgType = JsObject;
-
-    fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
-        Ok(Box::new(NodeProvisioningListener::new(cx, foreign)?))
+        stored.make_listener()
     }
 }
 
@@ -916,7 +781,7 @@ impl<'a> AsyncArgTypeInfo<'a> for Box<dyn crate::net::registration::ConnectChatB
 impl<'storage, 'context: 'storage> ArgTypeInfo<'storage, 'context>
     for &'storage mut dyn SyncInputStream
 {
-    type ArgType = JsUint8Array;
+    type ArgType = JsBuffer;
     type StoredType = NodeSyncInputStream<'context>;
 
     fn borrow(
@@ -930,36 +795,6 @@ impl<'storage, 'context: 'storage> ArgTypeInfo<'storage, 'context>
 
     fn load_from(stored: &'storage mut Self::StoredType) -> Self {
         stored
-    }
-}
-
-impl<'storage, 'context: 'storage> ArgTypeInfo<'storage, 'context>
-    for &'storage libsignal_account_keys::BackupKey
-{
-    type ArgType = JsTypedArray<u8>;
-    type StoredType = AssumedImmutableBuffer<'context>;
-    fn borrow(
-        cx: &mut FunctionContext<'context>,
-        foreign: Handle<'context, Self::ArgType>,
-    ) -> NeonResult<Self::StoredType> {
-        <&[u8; libsignal_account_keys::BACKUP_KEY_LEN]>::borrow(cx, foreign)
-    }
-    fn load_from(stored: &'storage mut Self::StoredType) -> Self {
-        <&[u8; libsignal_account_keys::BACKUP_KEY_LEN]>::load_from(stored).into()
-    }
-}
-
-impl<'storage> AsyncArgTypeInfo<'storage> for &'storage libsignal_account_keys::BackupKey {
-    type ArgType = JsTypedArray<u8>;
-    type StoredType = PersistentAssumedImmutableBuffer;
-    fn save_async_arg(
-        cx: &mut FunctionContext,
-        foreign: Handle<Self::ArgType>,
-    ) -> NeonResult<Self::StoredType> {
-        <&[u8; libsignal_account_keys::BACKUP_KEY_LEN]>::save_async_arg(cx, foreign)
-    }
-    fn load_async_arg(stored: &'storage mut Self::StoredType) -> Self {
-        <&[u8; libsignal_account_keys::BACKUP_KEY_LEN]>::load_async_arg(stored).into()
     }
 }
 
@@ -1027,35 +862,43 @@ impl<'a> ResultTypeInfo<'a> for &str {
 }
 
 impl<'a> ResultTypeInfo<'a> for &[u8] {
-    type ResultType = JsUint8Array;
+    type ResultType = JsBuffer;
     fn convert_into(self, cx: &mut impl Context<'a>) -> NeonResult<Handle<'a, Self::ResultType>> {
-        JsUint8Array::from_slice(cx, self)
+        let mut buffer = cx.buffer(self.len())?;
+        buffer.as_mut_slice(cx).copy_from_slice(self);
+        Ok(buffer)
     }
 }
 
 impl<'a> ResultTypeInfo<'a> for uuid::Uuid {
-    type ResultType = JsUint8Array;
+    type ResultType = JsBuffer;
     fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
-        JsUint8Array::from_slice(cx, self.as_bytes())
+        let mut buffer = cx.buffer(16)?;
+        buffer.as_mut_slice(cx).copy_from_slice(self.as_bytes());
+        Ok(buffer)
     }
 }
 
 impl<'a> ResultTypeInfo<'a> for libsignal_protocol::ServiceId {
-    type ResultType = JsUint8Array;
+    type ResultType = JsBuffer;
     fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
-        JsUint8Array::from_slice(cx, &self.service_id_fixed_width_binary())
+        let mut buffer = cx.buffer(17)?;
+        buffer
+            .as_mut_slice(cx)
+            .copy_from_slice(&self.service_id_fixed_width_binary());
+        Ok(buffer)
     }
 }
 
 impl<'a> ResultTypeInfo<'a> for libsignal_protocol::Aci {
-    type ResultType = JsUint8Array;
+    type ResultType = JsBuffer;
     fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
         libsignal_protocol::ServiceId::from(self).convert_into(cx)
     }
 }
 
 impl<'a> ResultTypeInfo<'a> for libsignal_protocol::Pni {
-    type ResultType = JsUint8Array;
+    type ResultType = JsBuffer;
     fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
         libsignal_protocol::ServiceId::from(self).convert_into(cx)
     }
@@ -1073,37 +916,25 @@ impl<'a, T: ResultTypeInfo<'a>> ResultTypeInfo<'a> for Option<T> {
 }
 
 impl<'a> ResultTypeInfo<'a> for Vec<u8> {
-    type ResultType = JsUint8Array;
+    type ResultType = JsBuffer;
     fn convert_into(self, cx: &mut impl Context<'a>) -> NeonResult<Handle<'a, Self::ResultType>> {
-        JsUint8Array::from_slice(cx, &self)
-    }
-}
-
-impl<'a> ResultTypeInfo<'a> for bytes::Bytes {
-    type ResultType = JsUint8Array;
-    fn convert_into(self, cx: &mut impl Context<'a>) -> NeonResult<Handle<'a, Self::ResultType>> {
-        JsUint8Array::from_slice(cx, &self)
-    }
-}
-
-impl<'a> ResultTypeInfo<'a> for &[&str] {
-    type ResultType = JsArray;
-    fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
-        make_array(cx, self.iter().copied())
+        let mut buffer = cx.buffer(self.len())?;
+        buffer.as_mut_slice(cx).copy_from_slice(&self);
+        Ok(buffer)
     }
 }
 
 impl<'a> ResultTypeInfo<'a> for Box<[String]> {
     type ResultType = JsArray;
     fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
-        make_array(cx, self)
+        make_array(cx, self.into_vec())
     }
 }
 
 impl<'a> ResultTypeInfo<'a> for Box<[Vec<u8>]> {
     type ResultType = JsArray;
     fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
-        make_array(cx, self)
+        make_array(cx, self.into_vec())
     }
 }
 
@@ -1120,12 +951,12 @@ where
     Ok(array)
 }
 
-/// Loads from a JsUint8Array, assuming it won't be mutated while in use.
+/// Loads from a JsBuffer, assuming it won't be mutated while in use.
 /// See [`AssumedImmutableBuffer`].
 impl<'storage, 'context: 'storage, const LEN: usize> ArgTypeInfo<'storage, 'context>
     for &'storage [u8; LEN]
 {
-    type ArgType = JsUint8Array;
+    type ArgType = JsBuffer;
     type StoredType = AssumedImmutableBuffer<'context>;
     fn borrow(
         cx: &mut FunctionContext,
@@ -1146,32 +977,8 @@ impl<'storage, 'context: 'storage, const LEN: usize> ArgTypeInfo<'storage, 'cont
     }
 }
 
-/// Loads from a JsUint8Array, assuming it won't be mutated while in use.
-/// See [`PersistentAssumedImmutableBuffer`].
-impl<'storage, const LEN: usize> AsyncArgTypeInfo<'storage> for &'storage [u8; LEN] {
-    type ArgType = JsUint8Array;
-    type StoredType = PersistentAssumedImmutableBuffer;
-    fn save_async_arg(
-        cx: &mut FunctionContext,
-        foreign: Handle<Self::ArgType>,
-    ) -> NeonResult<Self::StoredType> {
-        let result = PersistentAssumedImmutableBuffer::new(cx, foreign);
-        if result.len() != LEN {
-            cx.throw_error(format!(
-                "buffer has incorrect length {} (expected {})",
-                result.len(),
-                LEN
-            ))?;
-        }
-        Ok(result)
-    }
-    fn load_async_arg(stored: &'storage mut Self::StoredType) -> Self {
-        (&**stored).try_into().expect("checked length already")
-    }
-}
-
 impl<'a, const LEN: usize> ResultTypeInfo<'a> for [u8; LEN] {
-    type ResultType = JsUint8Array;
+    type ResultType = JsBuffer;
     fn convert_into(self, cx: &mut impl Context<'a>) -> NeonResult<Handle<'a, Self::ResultType>> {
         self.as_ref().convert_into(cx)
     }
@@ -1191,18 +998,6 @@ impl<'a> ResultTypeInfo<'a> for () {
     }
 }
 
-impl<'a, A: ResultTypeInfo<'a>, B: ResultTypeInfo<'a>> ResultTypeInfo<'a> for (A, B) {
-    type ResultType = JsArray;
-    fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
-        let a = self.0.convert_into(cx)?;
-        let b = self.1.convert_into(cx)?;
-        let result = cx.empty_array();
-        result.set(cx, 0, a)?;
-        result.set(cx, 1, b)?;
-        Ok(result)
-    }
-}
-
 impl<'a> ResultTypeInfo<'a> for MessageBackupValidationOutcome {
     type ResultType = JsObject;
 
@@ -1219,39 +1014,6 @@ impl<'a> ResultTypeInfo<'a> for MessageBackupValidationOutcome {
         obj.set(cx, "unknownFieldMessages", unknown_field_messages)?;
 
         Ok(obj)
-    }
-}
-
-impl<'a> ResultTypeInfo<'a> for JsonFrameExportResult {
-    type ResultType = JsObject;
-
-    fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
-        let JsonFrameExportResult {
-            line,
-            validation_error,
-        } = self;
-
-        let js_result = JsObject::new(cx);
-
-        if let Some(line) = line {
-            let line_value = cx.string(&line);
-            js_result.set(cx, "line", line_value)?;
-        }
-
-        if let Some(error) = validation_error {
-            let message = cx.string(error.to_string());
-            js_result.set(cx, "errorMessage", message)?;
-        }
-
-        Ok(js_result)
-    }
-}
-
-impl<'a> ResultTypeInfo<'a> for Box<[JsonFrameExportResult]> {
-    type ResultType = JsArray;
-
-    fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
-        make_array(cx, self.into_vec())
     }
 }
 
@@ -1373,7 +1135,7 @@ impl<'a> ResultTypeInfo<'a> for libsignal_net::cdsi::LookupResponse {
     }
 }
 
-impl<'a> ResultTypeInfo<'a> for libsignal_net_chat::api::ChallengeOption {
+impl<'a> ResultTypeInfo<'a> for libsignal_net::registration::RequestedInformation {
     type ResultType = JsString;
     fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
         Ok(cx.string(match self {
@@ -1383,47 +1145,21 @@ impl<'a> ResultTypeInfo<'a> for libsignal_net_chat::api::ChallengeOption {
     }
 }
 
-impl<'a> ResultTypeInfo<'a> for Box<[libsignal_net_chat::api::ChallengeOption]> {
+impl<'a> ResultTypeInfo<'a> for Box<[libsignal_net::registration::RequestedInformation]> {
     type ResultType = JsArray;
     fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
         make_array(cx, self)
     }
 }
 
-impl<'a> ResultTypeInfo<'a> for libsignal_net_chat::api::messages::MismatchedDeviceError {
-    type ResultType = JsObject;
-    fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
-        let js_account = self.account.convert_into(cx)?;
-        let js_missing_devices = make_array(cx, self.missing_devices.into_iter().map(u32::from))?;
-        let js_extra_devices = make_array(cx, self.extra_devices.into_iter().map(u32::from))?;
-        let js_stale_devices = make_array(cx, self.stale_devices.into_iter().map(u32::from))?;
-
-        let result = JsObject::new(cx);
-        result.set(cx, "account", js_account)?;
-        result.set(cx, "missingDevices", js_missing_devices)?;
-        result.set(cx, "extraDevices", js_extra_devices)?;
-        result.set(cx, "staleDevices", js_stale_devices)?;
-        Ok(result)
-    }
-}
-
-impl<'a> ResultTypeInfo<'a> for Vec<ServiceId> {
+impl<'a> ResultTypeInfo<'a> for Box<[libsignal_net::registration::RegisterResponseBadge]> {
     type ResultType = JsArray;
     fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
         make_array(cx, self)
     }
 }
 
-impl<'a> ResultTypeInfo<'a>
-    for Box<[libsignal_net_chat::api::registration::RegisterResponseBadge]>
-{
-    type ResultType = JsArray;
-    fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
-        make_array(cx, self)
-    }
-}
-
-impl<'a> ResultTypeInfo<'a> for libsignal_net_chat::api::registration::RegisterResponseBadge {
+impl<'a> ResultTypeInfo<'a> for libsignal_net::registration::RegisterResponseBadge {
     type ResultType = JsObject;
     fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
         let Self {
@@ -1446,9 +1182,7 @@ impl<'a> ResultTypeInfo<'a> for libsignal_net_chat::api::registration::RegisterR
     }
 }
 
-impl<'a> ResultTypeInfo<'a>
-    for libsignal_net_chat::api::registration::CheckSvr2CredentialsResponse
-{
+impl<'a> ResultTypeInfo<'a> for libsignal_net::registration::CheckSvr2CredentialsResponse {
     type ResultType = JsObject;
     fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
         let Self { matches } = self;
@@ -1471,17 +1205,6 @@ impl<'a> ResultTypeInfo<'a>
         let entries = entries.as_value(cx);
 
         map_constructor.construct(cx, [entries])
-    }
-}
-
-impl<'a> ResultTypeInfo<'a> for libsignal_net::chat::server_requests::DisconnectCause {
-    type ResultType = JsValue;
-
-    fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
-        match self {
-            Self::LocalDisconnect => Ok(cx.null().upcast()),
-            Self::Error(err) => Ok(err.into_throwable(cx, "DisconnectCause").upcast()),
-        }
     }
 }
 
@@ -1546,7 +1269,7 @@ where
         + for<'a> serde::Deserialize<'a>
         + partial_default::PartialDefault,
 {
-    type ArgType = JsUint8Array;
+    type ArgType = JsBuffer;
 
     fn convert_from(cx: &mut FunctionContext, foreign: Handle<Self::ArgType>) -> NeonResult<Self> {
         let bytes = foreign.as_slice(cx);
@@ -1569,7 +1292,7 @@ impl<'a, T> crate::node::ResultTypeInfo<'a> for Serialized<T>
 where
     T: FixedLengthBincodeSerializable + serde::Serialize,
 {
-    type ResultType = JsUint8Array;
+    type ResultType = JsBuffer;
 
     fn convert_into(self, cx: &mut impl Context<'a>) -> JsResult<'a, Self::ResultType> {
         let result = zkgroup::serialize(self.deref());
@@ -1755,46 +1478,6 @@ impl<T: Send + Sync + 'static> Finalize for PersistentBorrowedJsBoxedBridgeHandl
     }
 }
 
-/// Synchronous borrow of `&'a T` from a `JsArray` of wrappers with `_nativeHandle: JsBox<T>`.
-///
-/// Modeled after `PersistentArrayOfBorrowedJsBoxedBridgeHandles` but for sync contexts.
-///
-/// Holds the array `Handle<'a, JsArray>` so wrappers (and their `JsBox<T>`) remain reachable
-/// for the lifetime `'a` of the current Neon handle scope.
-pub struct ArrayOfBorrowedJsBoxedBridgeHandles<'a, T> {
-    // Explicitly show the ownership relationship of the parent array for lifetime of the struct.
-    _owner: Handle<'a, JsArray>,
-    value_refs: Vec<&'a T>,
-}
-
-impl<'a, T: BridgeHandle<Strategy = Immutable<T>>> ArrayOfBorrowedJsBoxedBridgeHandles<'a, T> {
-    /// Creates a new array of borrowed handles from a JavaScript array.
-    ///
-    /// The array must contain objects with a `_nativeHandle` property pointing to a boxed Rust value.
-    pub(crate) fn new(cx: &mut impl Context<'a>, array: Handle<'a, JsArray>) -> NeonResult<Self> {
-        let len = array.len(cx);
-        let value_refs = (0..len)
-            .map(|i| {
-                let element: Handle<JsObject> = array.get(cx, i)?;
-                let value_box: Handle<DefaultJsBox<T>> = element.get(cx, NATIVE_HANDLE_PROPERTY)?;
-                // Use as_inner() to get a reference with lifetime 'a (the handle scope)
-                // This is safe because the array handle keeps everything alive for 'a, and the handle is
-                // immutable so we should not have any aliasing issues.
-                let value_ref: &'a T = value_box.as_inner();
-                Ok(value_ref)
-            })
-            .collect::<NeonResult<Vec<&'a T>>>()?;
-        Ok(Self {
-            _owner: array,
-            value_refs,
-        })
-    }
-
-    pub(crate) fn value_refs(&self) -> &[&T] {
-        &self.value_refs
-    }
-}
-
 /// Safely persists an array of boxed Rust values by treating the array as a GC root.
 ///
 /// The array must contain wrapper objects that refer to an underlying `JsBox<T>`.
@@ -1862,24 +1545,6 @@ impl<'storage, T: BridgeHandle<Strategy = Immutable<T>> + Sync> AsyncArgTypeInfo
         PersistentArrayOfBorrowedJsBoxedBridgeHandles::new(cx, foreign)
     }
     fn load_async_arg(stored: &'storage mut Self::StoredType) -> Self {
-        stored.value_refs()
-    }
-}
-
-impl<'storage, 'context: 'storage, T: BridgeHandle<Strategy = Immutable<T>> + Sync>
-    ArgTypeInfo<'storage, 'context> for &'storage [&'storage T]
-{
-    type ArgType = JsArray;
-    type StoredType = ArrayOfBorrowedJsBoxedBridgeHandles<'context, T>;
-
-    fn borrow(
-        cx: &mut FunctionContext<'context>,
-        foreign: Handle<'context, Self::ArgType>,
-    ) -> NeonResult<Self::StoredType> {
-        ArrayOfBorrowedJsBoxedBridgeHandles::new(cx, foreign)
-    }
-
-    fn load_from(stored: &'storage mut Self::StoredType) -> Self {
         stored.value_refs()
     }
 }

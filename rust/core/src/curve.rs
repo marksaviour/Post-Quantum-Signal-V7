@@ -4,10 +4,12 @@
 //
 
 mod curve25519;
+mod utils;
 
+use std::cmp::Ordering;
 use std::fmt;
 
-use curve25519_dalek::{MontgomeryPoint, scalar};
+use curve25519_dalek::scalar;
 use rand::{CryptoRng, Rng};
 use subtle::ConstantTimeEq;
 
@@ -38,8 +40,6 @@ pub enum CurveError {
     BadKeyType(u8),
     /// bad key length <{1}> for key with type <{0}>
     BadKeyLength(KeyType, usize),
-    /// invalid key agreement output (all-zero shared secret)
-    InvalidKeyAgreement,
 }
 
 impl std::error::Error for CurveError {}
@@ -65,40 +65,26 @@ pub struct PublicKey {
     key: PublicKeyData,
 }
 
-// This implementation allows functions with the following signature
-// ```
-// fn foo(impl AsRef<PublicKey>) { ... }
-// ```
-// to accept both referenced `&PublicKey` and owned `PublicKey`.
-impl AsRef<PublicKey> for PublicKey {
-    fn as_ref(&self) -> &PublicKey {
-        self
-    }
-}
-
 impl PublicKey {
     fn new(key: PublicKeyData) -> Self {
         Self { key }
     }
 
     pub fn deserialize(value: &[u8]) -> Result<Self, CurveError> {
-        let (key_type, value) = value.split_first().ok_or(CurveError::NoKeyTypeIdentifier)?;
-        let key_type = KeyType::try_from(*key_type)?;
+        if value.is_empty() {
+            return Err(CurveError::NoKeyTypeIdentifier);
+        }
+        let key_type = KeyType::try_from(value[0])?;
         match key_type {
             KeyType::Djb => {
-                let (key, tail): (&[u8; curve25519::PUBLIC_KEY_LENGTH], _) = value
-                    .split_first_chunk()
-                    .ok_or(CurveError::BadKeyLength(KeyType::Djb, value.len() + 1))?;
-                // We currently allow trailing data after the public key.
-                // TODO: once this is known to not be seen in practice, make this a hard error.
-                if !tail.is_empty() {
-                    log::warn!(
-                        "ECPublicKey deserialized with {} trailing bytes",
-                        tail.len()
-                    );
+                // We allow trailing data after the public key (why?)
+                if value.len() < curve25519::PUBLIC_KEY_LENGTH + 1 {
+                    return Err(CurveError::BadKeyLength(KeyType::Djb, value.len()));
                 }
+                let mut key = [0u8; curve25519::PUBLIC_KEY_LENGTH];
+                key.copy_from_slice(&value[1..][..curve25519::PUBLIC_KEY_LENGTH]);
                 Ok(PublicKey {
-                    key: PublicKeyData::DjbPublicKey(*key),
+                    key: PublicKeyData::DjbPublicKey(key),
                 })
             }
         }
@@ -152,7 +138,7 @@ impl PublicKey {
 
     fn key_data(&self) -> &[u8] {
         match &self.key {
-            PublicKeyData::DjbPublicKey(k) => k.as_ref(),
+            PublicKeyData::DjbPublicKey(ref k) => k.as_ref(),
         }
     }
 
@@ -160,33 +146,6 @@ impl PublicKey {
         match &self.key {
             PublicKeyData::DjbPublicKey(_) => KeyType::Djb,
         }
-    }
-
-    fn is_torsion_free(&self) -> bool {
-        match &self.key {
-            PublicKeyData::DjbPublicKey(k) => {
-                let mont_point = MontgomeryPoint(*k);
-                mont_point
-                    .to_edwards(0)
-                    .is_some_and(|ed| ed.is_torsion_free())
-            }
-        }
-    }
-
-    fn scalar_is_in_range(&self) -> bool {
-        match &self.key {
-            PublicKeyData::DjbPublicKey(k) => {
-                // it is not true that the scalar is greater than 2^255 - 19
-                // specifically, it is not true that either the high bit is set
-                // or that the high 247 bits are all 1 and the bottom byte is >(2^8 - 19)
-                !(k[31] & 0b1000_0000_u8 != 0
-                    || (k[0] >= 0u8.wrapping_sub(19) && k[1..31] == [0xFFu8; 30] && k[31] == 0x7F))
-            }
-        }
-    }
-
-    pub fn is_canonical(&self) -> bool {
-        self.is_torsion_free() && self.scalar_is_in_range()
     }
 }
 
@@ -217,6 +176,22 @@ impl PartialEq for PublicKey {
     }
 }
 
+impl Ord for PublicKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.key_type() != other.key_type() {
+            return self.key_type().cmp(&other.key_type());
+        }
+
+        utils::constant_time_cmp(self.key_data(), other.key_data())
+    }
+}
+
+impl PartialOrd for PublicKey {
+    fn partial_cmp(&self, other: &PublicKey) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl fmt::Debug for PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -240,14 +215,17 @@ pub struct PrivateKey {
 
 impl PrivateKey {
     pub fn deserialize(value: &[u8]) -> Result<Self, CurveError> {
-        let mut key: [u8; curve25519::PRIVATE_KEY_LENGTH] = value
-            .try_into()
-            .map_err(|_| CurveError::BadKeyLength(KeyType::Djb, value.len()))?;
-        // Clamping is not necessary but is kept for backward compatibility
-        key = scalar::clamp_integer(key);
-        Ok(Self {
-            key: PrivateKeyData::DjbPrivateKey(key),
-        })
+        if value.len() != curve25519::PRIVATE_KEY_LENGTH {
+            Err(CurveError::BadKeyLength(KeyType::Djb, value.len()))
+        } else {
+            let mut key = [0u8; curve25519::PRIVATE_KEY_LENGTH];
+            key.copy_from_slice(&value[..curve25519::PRIVATE_KEY_LENGTH]);
+            // Clamping is not necessary but is kept for backward compatibility
+            key = scalar::clamp_integer(key);
+            Ok(Self {
+                key: PrivateKeyData::DjbPrivateKey(key),
+            })
+        }
     }
 
     pub fn serialize(&self) -> Vec<u8> {
@@ -297,13 +275,7 @@ impl PrivateKey {
         match (self.key, their_key.key) {
             (PrivateKeyData::DjbPrivateKey(priv_key), PublicKeyData::DjbPublicKey(pub_key)) => {
                 let private_key = curve25519::PrivateKey::from(priv_key);
-                let shared: [u8; curve25519::AGREEMENT_LENGTH] =
-                    private_key.calculate_agreement(&pub_key);
-                if bool::from(shared.ct_eq(&[0u8; curve25519::AGREEMENT_LENGTH])) {
-                    // Reject the invalid all-zero shared secret in constant time
-                    return Err(CurveError::InvalidKeyAgreement);
-                }
-                Ok(Box::new(shared))
+                Ok(Box::new(private_key.calculate_agreement(&pub_key)))
             }
         }
     }
@@ -384,10 +356,8 @@ impl TryFrom<PrivateKey> for KeyPair {
 #[cfg(test)]
 mod tests {
     use assert_matches::assert_matches;
-    use const_str::hex;
-    use curve25519_dalek::constants::EIGHT_TORSION;
-    use rand::TryRngCore as _;
     use rand::rngs::OsRng;
+    use rand::TryRngCore as _;
 
     use super::*;
 
@@ -407,12 +377,8 @@ mod tests {
         let public_key = key_pair.private_key.public_key()?;
         assert!(public_key.verify_signature(&message, &signature));
 
-        assert!(
-            public_key.verify_signature_for_multipart_message(
-                &[&message[..7], &message[7..]],
-                &signature
-            )
-        );
+        assert!(public_key
+            .verify_signature_for_multipart_message(&[&message[..7], &message[7..]], &signature));
 
         let signature = key_pair
             .private_key
@@ -437,8 +403,9 @@ mod tests {
         );
         let empty: [u8; 0] = [];
 
-        let just_right = PublicKey::try_from(&serialized_public[..])?;
+        let just_right = PublicKey::try_from(&serialized_public[..]);
 
+        assert!(just_right.is_ok());
         assert!(PublicKey::try_from(&serialized_public[1..]).is_err());
         assert!(PublicKey::try_from(&empty[..]).is_err());
 
@@ -452,7 +419,7 @@ mod tests {
         let extra_space_decode = PublicKey::try_from(&extra_space[..]);
         assert!(extra_space_decode.is_ok());
 
-        assert_eq!(&serialized_public[..], &just_right.serialize()[..]);
+        assert_eq!(&serialized_public[..], &just_right?.serialize()[..]);
         assert_eq!(&serialized_public[..], &extra_space_decode?.serialize()[..]);
         Ok(())
     }
@@ -462,101 +429,5 @@ mod tests {
         let error = CurveError::BadKeyType(u8::MAX);
         let error = Box::new(error) as Box<dyn std::error::Error>;
         assert_matches!(error.downcast_ref(), Some(CurveError::BadKeyType(_)));
-    }
-
-    #[test]
-    fn honest_keys_are_torsion_free() {
-        let mut csprng = OsRng.unwrap_err();
-        let key_pair = KeyPair::generate(&mut csprng);
-        assert!(key_pair.public_key.is_torsion_free());
-    }
-
-    #[test]
-    fn tweaked_keys_are_not_torsion_free() {
-        let mut csprng = OsRng.unwrap_err();
-        let key_pair = KeyPair::generate(&mut csprng);
-        let pk_bytes: [u8; 32] = key_pair.public_key.public_key_bytes().try_into().unwrap();
-        let mont_pt = MontgomeryPoint(pk_bytes);
-        let ed_pt = mont_pt.to_edwards(0).unwrap();
-        for t in EIGHT_TORSION.iter().skip(1) {
-            let tweaked = ed_pt + *t; // add a torsion point
-            let tweaked_mont = tweaked.to_montgomery();
-            let tweaked_pk_bytes: [u8; 32] = tweaked_mont.to_bytes();
-            let tweaked_pk = PublicKey::from_djb_public_key_bytes(&tweaked_pk_bytes).unwrap();
-            assert!(!tweaked_pk.is_torsion_free());
-        }
-    }
-
-    #[test]
-    fn keys_with_the_high_bit_set_are_out_of_range() {
-        assert!(
-            PublicKey::from_djb_public_key_bytes(&[0; 32])
-                .expect("structurally valid")
-                .scalar_is_in_range(),
-            "0 should be in range"
-        );
-        assert!(
-            !PublicKey::from_djb_public_key_bytes(&hex!(
-                "0000000000000000000000000000000000000000000000000000000000000080"
-            ))
-            .expect("structurally valid")
-            .scalar_is_in_range(),
-            "2^255 should be out of range"
-        );
-        assert!(
-            !PublicKey::from_djb_public_key_bytes(&[0xFF; 32])
-                .expect("structurally valid")
-                .scalar_is_in_range(),
-            "2^256 - 1 should be out of range"
-        );
-        {
-            let mut csprng = OsRng.unwrap_err();
-            let key_pair = KeyPair::generate(&mut csprng);
-            assert!(key_pair.public_key.scalar_is_in_range());
-            let mut pk_bytes: [u8; 32] = key_pair.public_key.public_key_bytes().try_into().unwrap();
-            assert!(pk_bytes[31] & 0x80 == 0);
-            pk_bytes[31] |= 0x80;
-            assert!(
-                !PublicKey::from_djb_public_key_bytes(&pk_bytes)
-                    .expect("structurally valid")
-                    .scalar_is_in_range(),
-                ">2^255 should be out of range"
-            );
-        }
-    }
-
-    #[test]
-    fn keys_above_the_prime_modulus_are_out_of_range() {
-        // Curve25519 scalars use a little-endian representation.
-        let two_to_the_255_minus_one =
-            hex!("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f");
-
-        for i in 1..=19 {
-            let mut pk_bytes = two_to_the_255_minus_one;
-            pk_bytes[0] -= i;
-            pk_bytes[0] += 1; // because our original literal was 2^255 - 1
-            assert!(
-                !PublicKey::from_djb_public_key_bytes(&pk_bytes)
-                    .expect("structurally valid")
-                    .scalar_is_in_range(),
-                "2^255 - {i} should be out of range",
-            );
-
-            let mut canonical_representative = [0; 32];
-            canonical_representative[0] = 19 - i;
-
-            assert_eq!(
-                MontgomeryPoint(pk_bytes),
-                MontgomeryPoint(canonical_representative)
-            );
-        }
-
-        let mut pk_bytes = two_to_the_255_minus_one;
-        pk_bytes[0] -= 19; // resulting in the value 2^255 - 20
-        assert!(
-            PublicKey::from_djb_public_key_bytes(&pk_bytes)
-                .expect("structurally valid")
-                .scalar_is_in_range()
-        );
     }
 }

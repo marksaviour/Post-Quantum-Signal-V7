@@ -21,7 +21,6 @@ cargo fetch
 
 export CARGO_PROFILE_RELEASE_DEBUG=1 # Enable line tables
 RUSTFLAGS="--cfg aes_armv8 ${RUSTFLAGS:-}" # Enable ARMv8 cryptography acceleration when available
-RUSTFLAGS="--cfg tokio_unstable ${RUSTFLAGS:-}" # Access tokio's unstable metrics
 RUSTFLAGS="$(rust_remap_path_options) ${RUSTFLAGS:-}" # Strip absolute paths
 export RUSTFLAGS
 
@@ -182,28 +181,15 @@ export CARGO_PROFILE_RELEASE_OPT_LEVEL=s # optimize for size over speed
 
 # Use full LTO and small BoringSSL curve tables to reduce binary size.
 export CFLAGS="-DOPENSSL_SMALL -flto=full ${CFLAGS:-}"
-export CXXFLAGS="-DOPENSSL_SMALL -flto=full ${CXXFLAGS:-}"
 export CARGO_PROFILE_RELEASE_LTO=fat
 export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
 
-# Instruct boring-sys to autolink the *static* libc++, and to delay that linking until the final
-# build product (the -bundle part). This is consistent with Google's advice for Android JNI
-# libraries that are not part of the main app build[1], elaborated on in a GitHub thread[2]. It's
-# also what we're doing with WebRTC. The syntax comes from rustc[3] via Cargo's rustc-link-lib build
-# script feature.
-#
-# [1]: https://developer.android.com/ndk/guides/middleware-vendors#using_the_stl
-# [2]: https://github.com/android/ndk/issues/796
-# [3]: https://doc.rust-lang.org/rustc/command-line-arguments.html#-l-link-the-generated-crate-to-a-native-library
-export BORING_BSSL_RUST_CPPLIB="static:-bundle=c++"
-
 # Use the Android NDK's prebuilt Clang+lld as pqcrypto's compiler and Rust's linker.
 ANDROID_TOOLCHAIN_DIR=$(echo "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt"/*/bin/)
-ANDROID_MIN_SDK_VERSION=23
-export CC_aarch64_linux_android="${ANDROID_TOOLCHAIN_DIR}/aarch64-linux-android${ANDROID_MIN_SDK_VERSION}-clang"
-export CC_armv7_linux_androideabi="${ANDROID_TOOLCHAIN_DIR}/armv7a-linux-androideabi${ANDROID_MIN_SDK_VERSION}-clang"
-export CC_x86_64_linux_android="${ANDROID_TOOLCHAIN_DIR}/x86_64-linux-android${ANDROID_MIN_SDK_VERSION}-clang"
-export CC_i686_linux_android="${ANDROID_TOOLCHAIN_DIR}/i686-linux-android${ANDROID_MIN_SDK_VERSION}-clang"
+export CC_aarch64_linux_android="${ANDROID_TOOLCHAIN_DIR}/aarch64-linux-android21-clang"
+export CC_armv7_linux_androideabi="${ANDROID_TOOLCHAIN_DIR}/armv7a-linux-androideabi21-clang"
+export CC_x86_64_linux_android="${ANDROID_TOOLCHAIN_DIR}/x86_64-linux-android21-clang"
+export CC_i686_linux_android="${ANDROID_TOOLCHAIN_DIR}/i686-linux-android21-clang"
 
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${CC_aarch64_linux_android}"
 export CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER="${CC_armv7_linux_androideabi}"
@@ -239,6 +225,6 @@ target_for_abi() {
 
 for abi in "${android_abis[@]}"; do
     rust_target=$(target_for_abi "$abi")
-    echo_then_run cargo build -p libsignal-jni -p libsignal-jni-testing ${RUST_RELEASE:+--release} ${FEATURES:+--features "${FEATURES[*]}"} -Z unstable-options --target "$rust_target" --artifact-dir "${ANDROID_LIB_DIR}/$abi" --timings
+    echo_then_run cargo build -p libsignal-jni -p libsignal-jni-testing ${RUST_RELEASE:+--release} ${FEATURES:+--features "${FEATURES[*]}"} -Z unstable-options --target "$rust_target" --artifact-dir "${ANDROID_LIB_DIR}/$abi"
     check_for_debug_level_logs_if_needed "${ANDROID_LIB_DIR}/$abi"
 done

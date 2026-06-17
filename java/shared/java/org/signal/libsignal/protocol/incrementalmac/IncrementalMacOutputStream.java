@@ -69,7 +69,6 @@ public final class IncrementalMacOutputStream extends OutputStream {
     if (this.closed) {
       return;
     }
-    this.closed = true;
     try {
       flush();
     } catch (IOException ignored) {
@@ -81,5 +80,16 @@ public final class IncrementalMacOutputStream extends OutputStream {
     // Intentionally not closing the inner stream, as it seems to be causing
     // problems on Android
     this.digestStream.close();
+    this.closed = true;
+  }
+
+  @Override
+  @SuppressWarnings("deprecation")
+  protected void finalize() throws Throwable {
+    try {
+      close();
+    } finally {
+      super.finalize();
+    }
   }
 }

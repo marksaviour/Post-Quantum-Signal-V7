@@ -34,23 +34,18 @@ public final class IncrementalMacInputStream extends InputStream {
       byte[] key,
       ChunkSizeChoice sizeChoice,
       byte[] digest,
-      boolean useDirectBuffer)
-      throws InvalidMacException {
+      boolean useDirectBuffer) {
     this.chunkSize = sizeChoice.getSizeInBytes();
     this.currentChunk =
         useDirectBuffer ? ByteBuffer.allocateDirect(chunkSize) : ByteBuffer.allocate(chunkSize);
     this.chunkValidationBuffer =
         this.currentChunk.hasArray() ? null : new byte[VALIDATION_BUFFER_SIZE];
-    this.readState = ReadState.READ_FROM_INPUT;
     this.channel = new MaybeEmptyChannel(channel);
-
-    long handle = Native.ValidatingMac_Initialize(key, chunkSize, digest);
-    if (handle == 0) {
-      throw new InvalidMacException("invalid configuration data");
-    }
+    this.readState = ReadState.READ_FROM_INPUT;
 
     this.handleOwner =
-        new NativeHandleGuard.CloseableOwner(handle) {
+        new NativeHandleGuard.CloseableOwner(
+            Native.ValidatingMac_Initialize(key, chunkSize, digest)) {
           @Override
           protected void release(long nativeHandle) {
             Native.ValidatingMac_Destroy(nativeHandle);
@@ -59,8 +54,7 @@ public final class IncrementalMacInputStream extends InputStream {
   }
 
   public IncrementalMacInputStream(
-      InputStream input, byte[] key, ChunkSizeChoice sizeChoice, byte[] digest)
-      throws InvalidMacException {
+      InputStream input, byte[] key, ChunkSizeChoice sizeChoice, byte[] digest) {
     this(Channels.newChannel(input), key, sizeChoice, digest, true);
   }
 
@@ -104,9 +98,19 @@ public final class IncrementalMacInputStream extends InputStream {
     if (this.closed) {
       return;
     }
-    this.closed = true;
     this.channel.close();
     this.handleOwner.close();
+    this.closed = true;
+  }
+
+  @Override
+  @SuppressWarnings("deprecation")
+  protected void finalize() throws Throwable {
+    try {
+      close();
+    } finally {
+      super.finalize();
+    }
   }
 
   // Read implementation for the READ_FROM_INPUT state.

@@ -9,11 +9,10 @@
  * @module MessageBackup
  */
 
-import * as Native from './Native.js';
-import { ErrorCode, LibSignalErrorBase } from './Errors.js';
-import { BackupForwardSecrecyToken, BackupKey } from './AccountKeys.js';
-import { Aci } from './Address.js';
-import { InputStream } from './io.js';
+import * as Native from '../Native';
+import { BackupKey } from './AccountKeys';
+import { Aci } from './Address';
+import { InputStream } from './io';
 
 export type InputStreamFactory = () => InputStream;
 
@@ -52,12 +51,10 @@ export type MessageBackupKeyInput = Readonly<
   | {
       accountEntropy: string;
       aci: Aci;
-      forwardSecrecyToken?: BackupForwardSecrecyToken;
     }
   | {
-      backupKey: BackupKey | Uint8Array;
-      backupId: Uint8Array;
-      forwardSecrecyToken?: BackupForwardSecrecyToken;
+      backupKey: BackupKey | Buffer;
+      backupId: Buffer;
     }
 >;
 
@@ -73,40 +70,39 @@ export class MessageBackupKey {
    * Create a backup bundle key from an account entropy pool and ACI.
    *
    * ...or from a backup key and ID, used when reading from a local backup, which may have been
-   * created with a different ACI.
+   * created with a different ACI. This still uses AccountEntropyPool-based key derivation rules; it
+   * cannot be used to read a backup created from a master key.
    *
    * The account entropy pool must be **validated**; passing an arbitrary string here is considered
    * a programmer error. Similarly, passing a backup key or ID of the wrong length is also an error.
    */
   public constructor(input: MessageBackupKeyInput) {
     if ('accountEntropy' in input) {
-      const { accountEntropy, aci, forwardSecrecyToken } = input;
+      const { accountEntropy, aci } = input;
       this._nativeHandle = Native.MessageBackupKey_FromAccountEntropyPool(
         accountEntropy,
-        aci.getServiceIdFixedWidthBinary(),
-        forwardSecrecyToken?.contents ?? null
+        aci.getServiceIdFixedWidthBinary()
       );
     } else {
-      const { backupId, forwardSecrecyToken } = input;
+      const { backupId } = input;
       let { backupKey } = input;
       if (backupKey instanceof BackupKey) {
         backupKey = backupKey.contents;
       }
       this._nativeHandle = Native.MessageBackupKey_FromBackupKeyAndBackupId(
         backupKey,
-        backupId,
-        forwardSecrecyToken?.contents ?? null
+        backupId
       );
     }
   }
 
   /** An HMAC key used to sign a backup file. */
-  public get hmacKey(): Uint8Array {
+  public get hmacKey(): Buffer {
     return Native.MessageBackupKey_GetHmacKey(this);
   }
 
   /** An AES-256-CBC key used to encrypt a backup file. */
-  public get aesKey(): Uint8Array {
+  public get aesKey(): Buffer {
     return Native.MessageBackupKey_GetAesKey(this);
   }
 }
@@ -115,7 +111,6 @@ export class MessageBackupKey {
 export enum Purpose {
   DeviceTransfer = 0,
   RemoteBackup = 1,
-  TakeoutExport = 2,
 }
 
 /**
@@ -188,7 +183,7 @@ export class OnlineBackupValidator {
    *
    * @throws BackupValidationError on error
    */
-  constructor(backupInfo: Uint8Array, purpose: Purpose) {
+  constructor(backupInfo: Buffer, purpose: Purpose) {
     this._nativeHandle = Native.OnlineBackupValidator_New(backupInfo, purpose);
   }
 
@@ -199,7 +194,7 @@ export class OnlineBackupValidator {
    *
    * @throws BackupValidationError on error
    */
-  addFrame(frame: Uint8Array): void {
+  addFrame(frame: Buffer): void {
     Native.OnlineBackupValidator_AddFrame(this, frame);
   }
 
@@ -277,86 +272,5 @@ export class ComparableBackup {
    */
   public get unknownFields(): Array<string> {
     return Native.ComparableBackup_GetUnknownFields(this);
-  }
-}
-
-/**
- * The output from processing a single frame for JSON export.
- *
- * There are four possibilities:
- * - `line` present, `errorMessage` absent - the common case, a frame converted (and possibly sanitized)
- *   with no problems.
- * - `line` present, `errorMessage` present - the frame has been converted, but would have failed
- *   validation.
- * - `line` absent, `errorMessage` absent - the frame has been filtered out wholesale.
- * - `line` absent, `errorMessage` present - the frame has been filtered out wholesale, but would have
- *   failed validation had it not been filtered out.
- */
-export type BackupJsonFrameResult = {
-  line?: string;
-  errorMessage?: string;
-};
-
-export type BackupJsonFinishResult = { errorMessage?: string };
-
-/**
- * Streaming exporter that produces a human-readable JSON representation of a backup.
- *
- * Validation feedback returned by this exporter is best-effort and intended for logging or
- * diagnostics. Even when a frame reports a validation error, the serialized line is still
- * produced so consumers can continue streaming the export.
- */
-export class BackupJsonExporter {
-  private constructor(readonly _nativeHandle: Native.BackupJsonExporter) {}
-
-  /**
-   * Initializes the streaming exporter and returns the first set of output lines.
-   * @param backupInfo The serialized BackupInfo protobuf without a varint header.
-   * @param [options] Additional configuration for the exporter.
-   * @param [options.validate=true] Whether to run semantic validation on the backup.
-   * @returns An object containing the exporter and the first chunk of output, containing the backup info.
-   * @throws Error if the input is invalid.
-   */
-  public static start(
-    backupInfo: Uint8Array,
-    options?: { validate?: boolean }
-  ): { exporter: BackupJsonExporter; chunk: string } {
-    const shouldValidate = options?.validate ?? true;
-    const handle = Native.BackupJsonExporter_New(backupInfo, shouldValidate);
-    const exporter = new BackupJsonExporter(handle);
-    const chunk = Native.BackupJsonExporter_GetInitialChunk(exporter);
-    return { exporter, chunk };
-  }
-
-  /**
-   * Validates and exports a human-readable JSON representation of backup frames.
-   * @param frames One or more varint delimited Frame serialized protobuf messages.
-   * @returns An array containing the line and any validation error for each frame.
-   * Frames that report validation errors still include their serialized `line`, so consumers
-   * should continue processing the export and surface the errors for observability rather than
-   * aborting.
-   * @throws Error if the input data cannot be parsed.
-   */
-  public exportFrames(frames: Uint8Array): BackupJsonFrameResult[] {
-    return Native.BackupJsonExporter_ExportFrames(this, frames);
-  }
-
-  /**
-   * Completes the validation and export of the previously exported frames.
-   *
-   * Per-frame validation errors are reported via `exportFrames`, so callers
-   * should inspect earlier results even if this returns with no error.
-   * @returns The outcome of the final validation stage.
-   */
-  public finish(): BackupJsonFinishResult {
-    try {
-      Native.BackupJsonExporter_Finish(this);
-      return {};
-    } catch (error: unknown) {
-      if (LibSignalErrorBase.is(error, ErrorCode.BackupValidation)) {
-        return { errorMessage: error.message };
-      }
-      throw error;
-    }
   }
 }

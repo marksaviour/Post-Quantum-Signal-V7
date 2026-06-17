@@ -6,27 +6,25 @@
 import Foundation
 import SignalFfi
 
-// swiftlint:disable:next explicit_init_for_public_struct
 public struct DisplayableFingerprint: Sendable {
     public let formatted: String
 }
 
-// swiftlint:disable:next explicit_init_for_public_struct
 public struct ScannableFingerprint: Sendable {
-    public let encoding: Data
+    public let encoding: [UInt8]
 
     /// Returns `true` if this fingerprint matches the fingerprint encoding `other`, `false` if not.
     ///
     /// Throws an error if `other` is not a valid fingerprint encoding, or if it uses an
     /// incompatible encoding version.
     public func compare<Other: ContiguousBytes>(againstEncoding other: Other) throws -> Bool {
-        return try encoding.withUnsafeBorrowedBuffer { encodingBuffer in
+        var result = false
+        try encoding.withUnsafeBorrowedBuffer { encodingBuffer in
             try other.withUnsafeBorrowedBuffer { otherBuffer in
-                try invokeFnReturningBool {
-                    signal_fingerprint_compare($0, encodingBuffer, otherBuffer)
-                }
+                try checkError(signal_fingerprint_compare(&result, encodingBuffer, otherBuffer))
             }
         }
+        return result
     }
 }
 
@@ -54,22 +52,20 @@ public struct NumericFingerprintGenerator: Sendable {
         remoteIdentifier: some ContiguousBytes,
         remoteKey: PublicKey
     ) throws -> Fingerprint {
-        let obj = try withAllBorrowed(
-            localKey,
-            remoteKey,
-            .bytes(localIdentifier),
-            .bytes(remoteIdentifier)
-        ) { localKeyHandle, remoteKeyHandle, localBuffer, remoteBuffer in
-            try invokeFnReturningValueByPointer(.init()) {
-                signal_fingerprint_new(
-                    $0,
-                    UInt32(self.iterations),
-                    UInt32(version),
-                    localBuffer,
-                    localKeyHandle.const(),
-                    remoteBuffer,
-                    remoteKeyHandle.const()
-                )
+        var obj = SignalMutPointerFingerprint()
+        try withNativeHandles(localKey, remoteKey) { localKeyHandle, remoteKeyHandle in
+            try localIdentifier.withUnsafeBorrowedBuffer { localBuffer in
+                try remoteIdentifier.withUnsafeBorrowedBuffer { remoteBuffer in
+                    try checkError(signal_fingerprint_new(
+                        &obj,
+                        UInt32(self.iterations),
+                        UInt32(version),
+                        localBuffer,
+                        localKeyHandle.const(),
+                        remoteBuffer,
+                        remoteKeyHandle.const()
+                    ))
+                }
             }
         }
 
@@ -78,7 +74,7 @@ public struct NumericFingerprintGenerator: Sendable {
         }
         let displayable = DisplayableFingerprint(formatted: fprintStr)
 
-        let scannableBits = try invokeFnReturningData {
+        let scannableBits = try invokeFnReturningArray {
             signal_fingerprint_scannable_encoding($0, obj.const())
         }
         let scannable = ScannableFingerprint(encoding: scannableBits)

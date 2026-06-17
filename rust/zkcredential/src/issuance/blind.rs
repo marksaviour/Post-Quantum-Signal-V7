@@ -65,7 +65,7 @@ use crate::credentials::{Credential, CredentialKeyPair, CredentialPublicKey, NUM
 use crate::issuance::IssuanceProof;
 use crate::issuance::IssuanceProofBuilder;
 use crate::sho::ShoExt;
-use crate::{RANDOMNESS_LEN, VerificationFailure};
+use crate::{VerificationFailure, RANDOMNESS_LEN};
 
 /// Marker trait used by [`BlindedPoint`] and [`BlindedAttribute`].
 ///
@@ -243,7 +243,7 @@ impl Serialize for BlindingKeyPair {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialDefault)]
+#[derive(Serialize, Deserialize, PartialDefault)]
 struct BlindedCredential {
     t: Scalar,
     U: RistrettoPoint,
@@ -256,7 +256,7 @@ struct BlindedCredential {
 /// Slightly larger than a typical [`IssuanceProof`] (which is why it's a separate type at all).
 ///
 /// Use [`IssuanceProofBuilder`] to validate and extract the credential.
-#[derive(Clone, Serialize, Deserialize, PartialDefault)]
+#[derive(Serialize, Deserialize, PartialDefault)]
 pub struct BlindedIssuanceProof {
     credential: BlindedCredential,
     poksho_proof: Vec<u8>,
@@ -491,7 +491,7 @@ impl BlindedIssuanceProofBuilder<'_> {
                 self.inner.authenticated_message,
                 &sho.squeeze_and_ratchet_as_array::<RANDOMNESS_LEN>(),
             )
-            .expect("valid proof");
+            .unwrap();
         BlindedIssuanceProof {
             poksho_proof,
             credential,

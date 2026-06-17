@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import * as Native from './Native.js';
+import * as Native from '../Native';
 
 export class BridgedStringMap {
   readonly _nativeHandle: Native.BridgedStringMap;
 
-  constructor(input: ReadonlyMap<string, string>) {
+  constructor(input: Map<string, string>) {
     this._nativeHandle = Native.BridgedStringMap_new(input.size);
     for (const [key, value] of input) {
       Native.BridgedStringMap_insert(this, key, value);

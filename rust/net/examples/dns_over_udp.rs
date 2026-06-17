@@ -12,7 +12,7 @@ use futures_util::StreamExt;
 use libsignal_net::infra::dns::custom_resolver::DnsTransport;
 use libsignal_net::infra::dns::dns_lookup::DnsLookupRequest;
 use libsignal_net_infra::dns::dns_transport_udp::UdpTransportConnector;
-use libsignal_net_infra::route::{ErrorHandling, NoDelay, UdpRoute};
+use libsignal_net_infra::route::{NoDelay, UdpRoute};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -32,10 +32,9 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::new()
+    let _ = env_logger::builder()
         .filter_level(log::LevelFilter::Debug)
-        .parse_default_env()
-        .init();
+        .try_init();
 
     let args = Args::parse();
 
@@ -49,8 +48,8 @@ async fn main() {
         NoDelay,
         UdpTransportConnector,
         (),
-        "dns_over_https",
-        |_| ErrorHandling::Continue::<std::convert::Infallible>,
+        "dns_over_https".into(),
+        |_| std::ops::ControlFlow::Continue::<std::convert::Infallible>(()),
     )
     .await
     .0

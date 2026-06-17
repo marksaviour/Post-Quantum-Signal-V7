@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 #
 
-FROM ubuntu:jammy-20260109@sha256:c7eb020043d8fc2ae0793fb35a37bff1cf33f156d4d4b12ccc7f3ef8706c38b1
+FROM ubuntu:jammy-20230624@sha256:b060fffe8e1561c9c3e6dea6db487b900100fc26830b9ea2ec966c151ab4c020
 
 COPY java/docker/ docker/
 COPY java/docker/apt.conf java/docker/sources.list /etc/apt/
@@ -29,10 +29,10 @@ RUN    groupadd -o -g "${GID}" libsignal \
     && useradd -m -o -u "${UID}" -g "${GID}" -s /bin/bash libsignal
 
 USER libsignal
-ENV HOME=/home/libsignal
-ENV USER=libsignal
-ENV SHELL=/bin/bash
-ENV LANG=C.UTF-8
+ENV HOME /home/libsignal
+ENV USER libsignal
+ENV SHELL /bin/bash
+ENV LANG C.UTF-8
 
 WORKDIR /home/libsignal
 
@@ -42,8 +42,8 @@ ARG ANDROID_SDK_SHA=124f2d5115eee365df6cf3228ffbca6fc3911d16f8025bebd5b1c6e2fcfa
 ARG ANDROID_API_LEVELS=android-34
 ARG ANDROID_BUILD_TOOLS_VERSION=34.0.0
 ARG NDK_VERSION=28.0.13004108
-ENV ANDROID_HOME=/home/libsignal/android-sdk
-ENV PATH=${PATH}:${ANDROID_HOME}/tools:${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/cmdline-tools/bin
+ENV ANDROID_HOME /home/libsignal/android-sdk
+ENV PATH ${PATH}:${ANDROID_HOME}/tools:${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/cmdline-tools/bin
 
 ADD --chown=libsignal --checksum=sha256:${ANDROID_SDK_SHA} \
     https://dl.google.com/android/repository/${ANDROID_SDK_FILENAME} ${ANDROID_SDK_FILENAME}
@@ -61,23 +61,16 @@ RUN    ./gradlew --version
 # Rust setup...
 
 COPY rust-toolchain rust-toolchain
-ARG RUSTUP_SHA=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c
+ARG RUSTUP_SHA=ad1f8b5199b3b9e231472ed7aa08d2e5d1d539198a15c5b1e53c746aad81d27b
 ENV PATH="/home/libsignal/.cargo/bin:${PATH}"
 
 ADD --chown=libsignal --chmod=755 --checksum=sha256:${RUSTUP_SHA} \
-    https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init /tmp/rustup-init
+    https://static.rust-lang.org/rustup/archive/1.21.1/x86_64-unknown-linux-gnu/rustup-init /tmp/rustup-init
 
 RUN    /tmp/rustup-init -y --profile minimal --default-toolchain "$(cat rust-toolchain)" \
     && rm -rf /tmp/rustup-init
 
 RUN    rustup target add armv7-linux-androideabi aarch64-linux-android i686-linux-android x86_64-linux-android aarch64-unknown-linux-gnu
-
-# Manually install a newer protoc
-ADD --chown=libsignal https://github.com/protocolbuffers/protobuf/releases/download/v29.3/protoc-29.3-linux-x86_64.zip protoc.zip
-
-RUN unzip protoc.zip -d proto && rm -f protoc.zip
-
-ENV PATH="/home/libsignal/proto/bin:${PATH}"
 
 # Install the full set of tools now that the long setup steps are done.
 # Note that we temporarily hop back to root to do this.
@@ -92,6 +85,7 @@ RUN    apt-get install -y \
                gpg-agent \
                libclang-dev \
                make \
+               protobuf-compiler \
                python3
 USER libsignal
 

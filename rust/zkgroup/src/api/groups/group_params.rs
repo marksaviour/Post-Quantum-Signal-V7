@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-use aes_gcm_siv::aead::Aead;
 use aes_gcm_siv::aead::generic_array::GenericArray;
+use aes_gcm_siv::aead::Aead;
 use aes_gcm_siv::{Aes256GcmSiv, KeyInit};
 use partial_default::PartialDefault;
 use serde::{Deserialize, Serialize};
@@ -204,9 +204,8 @@ impl GroupSecretParams {
             return Err(ZkGroupVerificationFailure);
         }
         let unreserved_len = ciphertext.len() - 1;
-        let (ciphertext, nonce) = ciphertext[..unreserved_len]
-            .split_last_chunk::<AESGCM_NONCE_LEN>()
-            .expect("checked length already");
+        let nonce = &ciphertext[unreserved_len - AESGCM_NONCE_LEN..unreserved_len];
+        let ciphertext = &ciphertext[..unreserved_len - AESGCM_NONCE_LEN];
         self.decrypt_blob_aesgcmsiv(&self.blob_key, nonce, ciphertext)
     }
 
@@ -216,11 +215,13 @@ impl GroupSecretParams {
     ) -> Result<Vec<u8>, ZkGroupVerificationFailure> {
         let mut decrypted = self.decrypt_blob(ciphertext)?;
 
-        let (padding_len_bytes, plaintext_plus_padding) = decrypted
-            .split_first_chunk::<ENCRYPTED_BLOB_PADDING_LENGTH_SIZE>()
-            .ok_or(ZkGroupVerificationFailure)?;
+        if decrypted.len() < ENCRYPTED_BLOB_PADDING_LENGTH_SIZE {
+            return Err(ZkGroupVerificationFailure);
+        }
+        let (padding_len_bytes, plaintext_plus_padding) =
+            decrypted.split_at(ENCRYPTED_BLOB_PADDING_LENGTH_SIZE);
 
-        let padding_len = u32::from_be_bytes(*padding_len_bytes);
+        let padding_len = u32::from_be_bytes(padding_len_bytes.try_into().expect("correct size"));
         if plaintext_plus_padding.len() < padding_len as usize {
             return Err(ZkGroupVerificationFailure);
         }

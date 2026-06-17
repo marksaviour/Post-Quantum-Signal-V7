@@ -8,7 +8,6 @@ import XCTest
 @testable import LibSignalClient
 
 class MessageBackupTests: TestCaseBase {
-    #if !os(iOS) || targetEnvironment(simulator)
     func testValidInput() throws {
         let validBackupContents = readResource(forName: "new_account.binproto.encrypted")
 
@@ -23,32 +22,6 @@ class MessageBackupTests: TestCaseBase {
             makeStream: { SignalInputStreamAdapter(validBackupContents) }
         )
     }
-    #endif
-
-    func testDerivingKeyWithForwardSecrecyToken() {
-        let accountEntropy = String(repeating: "m", count: 64)
-        let uuid: uuid_t = (
-            0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11
-        )
-        let aci = Aci(fromUUID: UUID(uuid: uuid))
-        let token = try! BackupForwardSecrecyToken(contents: Data(repeating: 0xbf, count: 32))
-
-        let keyFromAEP = try! MessageBackupKey(accountEntropy: accountEntropy, aci: aci, forwardSecrecyToken: token)
-        XCTAssertNotEqual(keyFromAEP.aesKey, try! MessageBackupKey(accountEntropy: accountEntropy, aci: aci).aesKey)
-
-        let backupKey = try! BackupKey(contents: Data(repeating: 0xba, count: 32))
-        let backupId = Data(repeating: 0x1d, count: 16)
-
-        let keyFromBackupInfo = try! MessageBackupKey(
-            backupKey: backupKey,
-            backupId: backupId,
-            forwardSecrecyToken: token
-        )
-        XCTAssertNotEqual(
-            keyFromBackupInfo.aesKey,
-            try! MessageBackupKey(backupKey: backupKey, backupId: backupId).aesKey
-        )
-    }
 
     func testMessageBackupKeyParts() {
         let testKey = MessageBackupKey.testKey()
@@ -58,7 +31,6 @@ class MessageBackupTests: TestCaseBase {
         XCTAssertNotEqual(testKey.hmacKey, testKey.aesKey)
     }
 
-    #if !os(iOS) || targetEnvironment(simulator)
     func testInvalidInput() throws {
         // Start with a valid file, then overwrite some bytes
         var bytes = readResource(forName: "new_account.binproto.encrypted")
@@ -72,12 +44,11 @@ class MessageBackupTests: TestCaseBase {
             }
         }
     }
-    #endif
 
     func testEmptyInput() throws {
         XCTAssertThrowsError(try Self.validateBackup(bytes: [])) { error in
-            if case SignalError.ioError(let message) = error {
-                XCTAssertEqual(message, "IO error: unexpected end of file")
+            if let error = error as? MessageBackupValidationError {
+                XCTAssertEqual(error.errorMessage, "not enough bytes for an HMAC")
             } else {
                 XCTFail("\(error)")
             }
@@ -98,24 +69,15 @@ class MessageBackupTests: TestCaseBase {
         }
     }
 
-    #if !os(iOS) || targetEnvironment(simulator)
     func testInputThrowsAfter() {
         let bytes = readResource(forName: "new_account.binproto.encrypted")
-        let makeStream = {
-            ThrowsAfterInputStream(inner: SignalInputStreamAdapter(bytes), readBeforeThrow: UInt64(bytes.count) - 1)
-        }
+        let makeStream = { ThrowsAfterInputStream(inner: SignalInputStreamAdapter(bytes), readBeforeThrow: UInt64(bytes.count) - 1) }
         XCTAssertThrowsError(
-            try validateMessageBackup(
-                key: MessageBackupKey.testKey(),
-                purpose: .remoteBackup,
-                length: UInt64(bytes.count),
-                makeStream: makeStream
-            )
+            try validateMessageBackup(key: MessageBackupKey.testKey(), purpose: .remoteBackup, length: UInt64(bytes.count), makeStream: makeStream)
         ) { error in
             if error is TestIoError {} else { XCTFail("\(error)") }
         }
     }
-    #endif
 
     func testOnlineValidatorInvalidBackupInfo() throws {
         XCTAssertThrowsError(try OnlineBackupValidator(backupInfo: [], purpose: .remoteBackup))
@@ -128,9 +90,7 @@ class MessageBackupTests: TestCaseBase {
     // 1: 1
     // 2: 1731715200000
     // 3: {`00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff`}
-    private let VALID_BACKUP_INFO: Data = .init(
-        base64Encoded: "CAEQgOiTkrMyGiAAESIzRFVmd4iZqrvM3e7/ABEiM0RVZneImaq7zN3u/w=="
-    )!
+    private let VALID_BACKUP_INFO: Data = .init(base64Encoded: "CAEQgOiTkrMyGiAAESIzRFVmd4iZqrvM3e7/ABEiM0RVZneImaq7zN3u/w==")!
 
     func testOnlineValidatorInvalidFrame() throws {
         let backup = try OnlineBackupValidator(backupInfo: VALID_BACKUP_INFO, purpose: .remoteBackup)
@@ -146,19 +106,13 @@ class MessageBackupTests: TestCaseBase {
         XCTAssertFalse(AccountEntropyPool.isValid("invalid key"))
         XCTAssertTrue(
             AccountEntropyPool.isValid(
-                "0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqr"
-            )
-        )
+                "0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqr"))
     }
 
-    #if !os(iOS) || targetEnvironment(simulator)
+#if !os(iOS) || targetEnvironment(simulator)
     func testComparableBackup() throws {
         let bytes = readResource(forName: "canonical-backup.binproto")
-        let backup = try ComparableBackup(
-            purpose: .remoteBackup,
-            length: UInt64(bytes.count),
-            stream: SignalInputStreamAdapter(bytes)
-        )
+        let backup = try ComparableBackup(purpose: .remoteBackup, length: UInt64(bytes.count), stream: SignalInputStreamAdapter(bytes))
         let comparableString = backup.comparableString()
 
         let expected = String(data: readResource(forName: "canonical-backup.expected.json"), encoding: .utf8)!
@@ -193,15 +147,10 @@ class MessageBackupTests: TestCaseBase {
 
         try backup.finalize()
     }
-    #endif
+#endif
 
     static func validateBackup(bytes: some Collection<UInt8>) throws -> MessageBackupUnknownFields {
-        try validateMessageBackup(
-            key: MessageBackupKey.testKey(),
-            purpose: .remoteBackup,
-            length: UInt64(bytes.count),
-            makeStream: { SignalInputStreamAdapter(bytes) }
-        )
+        try validateMessageBackup(key: MessageBackupKey.testKey(), purpose: .remoteBackup, length: UInt64(bytes.count), makeStream: { SignalInputStreamAdapter(bytes) })
     }
 }
 

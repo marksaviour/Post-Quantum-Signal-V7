@@ -3,21 +3,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import { randomBytes } from 'node:crypto';
+import { randomBytes } from 'crypto';
 
-import { RANDOM_LENGTH } from '../internal/Constants.js';
-import * as Native from '../../Native.js';
+import { RANDOM_LENGTH } from '../internal/Constants';
+import * as Native from '../../../Native';
 
-import ServerPublicParams from '../ServerPublicParams.js';
-import GroupSecretParams from '../groups/GroupSecretParams.js';
+import ServerPublicParams from '../ServerPublicParams';
+import GroupSecretParams from '../groups/GroupSecretParams';
 
-import ExpiringProfileKeyCredential from './ExpiringProfileKeyCredential.js';
-import ExpiringProfileKeyCredentialResponse from './ExpiringProfileKeyCredentialResponse.js';
-import ProfileKey from './ProfileKey.js';
-import ProfileKeyCredentialPresentation from './ProfileKeyCredentialPresentation.js';
-import ProfileKeyCredentialRequestContext from './ProfileKeyCredentialRequestContext.js';
+import ExpiringProfileKeyCredential from './ExpiringProfileKeyCredential';
+import ExpiringProfileKeyCredentialResponse from './ExpiringProfileKeyCredentialResponse';
+import ProfileKey from './ProfileKey';
+import ProfileKeyCredentialPresentation from './ProfileKeyCredentialPresentation';
+import ProfileKeyCredentialRequestContext from './ProfileKeyCredentialRequestContext';
 
-import { Aci } from '../../Address.js';
+import { Aci } from '../../Address';
 
 export default class ClientZkProfileOperations {
   serverPublicParams: ServerPublicParams;
@@ -40,7 +40,7 @@ export default class ClientZkProfileOperations {
   }
 
   createProfileKeyCredentialRequestContextWithRandom(
-    random: Uint8Array,
+    random: Buffer,
     userId: Aci,
     profileKey: ProfileKey
   ): ProfileKeyCredentialRequestContext {
@@ -83,7 +83,7 @@ export default class ClientZkProfileOperations {
   }
 
   createExpiringProfileKeyCredentialPresentationWithRandom(
-    random: Uint8Array,
+    random: Buffer,
     groupSecretParams: GroupSecretParams,
     profileKeyCredential: ExpiringProfileKeyCredential
   ): ProfileKeyCredentialPresentation {

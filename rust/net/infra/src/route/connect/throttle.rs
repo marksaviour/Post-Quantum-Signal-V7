@@ -83,7 +83,7 @@ where
         &self,
         over: Inner,
         route: R,
-        log_tag: &str,
+        log_tag: Arc<str>,
     ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
         let Self { inner, permits } = self;
         async move {

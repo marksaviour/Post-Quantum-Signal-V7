@@ -21,7 +21,7 @@ pub mod node;
 #[macro_use]
 pub mod support;
 
-pub use support::{AsyncRuntime, ResultReporter, describe_panic};
+pub use support::{describe_panic, AsyncRuntime, ResultReporter};
 
 pub mod cds2;
 pub mod crypto;
@@ -36,6 +36,8 @@ pub mod zkgroup;
 mod pin {
     use ::libsignal_account_keys::PinHash;
 
+    use crate::*;
+
     bridge_as_handle!(PinHash, node = false);
 }
 
@@ -43,6 +45,7 @@ pub mod incremental_mac;
 pub mod message_backup;
 
 pub mod io;
+pub mod keytrans;
 
 pub mod media {
     // Wrapper struct for cbindgen

@@ -3,24 +3,23 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import { config, expect, use } from 'chai';
-import chaiAsPromised from 'chai-as-promised';
-import sinonChai from 'sinon-chai';
-import { Buffer } from 'node:buffer';
-
-import * as util from './util.js';
-import * as Native from '../Native.js';
-import { ErrorCode, LibSignalErrorBase } from '../Errors.js';
+import { assert, config, expect, use } from 'chai';
+import * as chaiAsPromised from 'chai-as-promised';
+import * as sinonChai from 'sinon-chai';
+import * as util from './util';
+import * as Native from '../../Native';
+import { ErrorCode, LibSignalErrorBase } from '../Errors';
 import {
   RegisterAccountResponse,
   RegistrationService,
   RegistrationSessionState,
   Svr2CredentialResult,
   TokioAsyncContext,
-} from '../net.js';
-import { IdentityKeyPair } from '../EcKeys.js';
-import { Aci, Pni } from '../Address.js';
-import { newNativeHandle } from '../internal.js';
+} from '../net';
+import { InternalRequest } from './NetTest';
+import { IdentityKeyPair } from '../EcKeys';
+import { Aci, Pni } from '../Address';
+import { newNativeHandle } from '../internal';
 
 use(chaiAsPromised);
 use(sinonChai);
@@ -71,7 +70,7 @@ describe('Registration types', () => {
     );
     expect(response.usernameHash).to.deep.eq(Buffer.from('username-hash'));
     expect(response.usernameLinkHandle).to.deep.eq(
-      Uint8Array.from(Array(16).fill(0x55))
+      Buffer.from(Array(16).fill(0x55))
     );
     expect(response.storageCapable).to.eq(true);
     expect(response.entitlementBadges).to.deep.eq([
@@ -120,21 +119,6 @@ describe('Registration types', () => {
       },
     ];
     const timeoutCase: [string, ErrorCode] = ['Timeout', ErrorCode.IoError];
-    const serverSideErrorCase: [string, object] = [
-      'ServerSideError',
-      {
-        code: ErrorCode.Generic,
-        message: 'server-side error, retryable with backoff',
-      },
-    ];
-    const rateLimitChallengeCase: [string, object] = [
-      'PushChallenge',
-      {
-        code: ErrorCode.RateLimitChallengeError,
-        token: 'token',
-        options: new Set(['pushChallenge']),
-      },
-    ];
     const cases: Array<{
       operationName: string;
       convertFn: (_: string) => void;
@@ -148,8 +132,6 @@ describe('Registration types', () => {
           retryLaterCase,
           unknownCase,
           timeoutCase,
-          serverSideErrorCase,
-          rateLimitChallengeCase,
         ],
       },
       {
@@ -160,8 +142,6 @@ describe('Registration types', () => {
           ['SessionNotFound', ErrorCode.Generic],
           unknownCase,
           timeoutCase,
-          serverSideErrorCase,
-          rateLimitChallengeCase,
         ],
       },
       {
@@ -172,7 +152,6 @@ describe('Registration types', () => {
           retryLaterCase,
           unknownCase,
           timeoutCase,
-          serverSideErrorCase,
         ],
       },
       {
@@ -188,7 +167,6 @@ describe('Registration types', () => {
           retryLaterCase,
           unknownCase,
           timeoutCase,
-          serverSideErrorCase,
         ],
       },
       {
@@ -202,7 +180,6 @@ describe('Registration types', () => {
           retryLaterCase,
           unknownCase,
           timeoutCase,
-          serverSideErrorCase,
         ],
       },
       {
@@ -213,7 +190,6 @@ describe('Registration types', () => {
           ['CredentialsCouldNotBeParsed', ErrorCode.Generic],
           unknownCase,
           timeoutCase,
-          serverSideErrorCase,
         ],
       },
       {
@@ -227,7 +203,6 @@ describe('Registration types', () => {
           retryLaterCase,
           unknownCase,
           timeoutCase,
-          serverSideErrorCase,
         ],
       },
     ];
@@ -237,7 +212,7 @@ describe('Registration types', () => {
         testCases.forEach(([name, expectation]) => {
           expect(convertFn.bind(Native, name))
             .throws(LibSignalErrorBase)
-            .to.deep.include(
+            .to.include(
               expectation instanceof Object
                 ? expectation
                 : { code: expectation }
@@ -253,30 +228,44 @@ describe('Registration client', () => {
     it('can create a new session', async () => {
       const tokio = new TokioAsyncContext(Native.TokioAsyncContext_new());
 
-      const [createSession, getRemote] = RegistrationService.fakeCreateSession(
+      const [createSession, server] = RegistrationService.fakeCreateSession(
         tokio,
         { e164: '+18005550123' }
       );
-      const fakeRemote = await getRemote;
 
-      const firstRequest = await fakeRemote.assertReceiveIncomingRequest();
+      const fakeRemote = newNativeHandle(
+        await Native.TESTING_FakeChatServer_GetNextRemote(tokio, server)
+      );
+      const firstRequestHandle =
+        await Native.TESTING_FakeChatRemoteEnd_ReceiveIncomingRequest(
+          tokio,
+          fakeRemote
+        );
+      assert(firstRequestHandle !== null);
+      const firstRequest = new InternalRequest(firstRequestHandle);
 
       expect(firstRequest.verb).to.eq('POST');
       expect(firstRequest.path).to.eq('/v1/verification/session');
 
-      fakeRemote.sendReplyTo(firstRequest, {
-        status: 200,
-        message: 'OK',
-        headers: ['content-type: application/json'],
-        body: Buffer.from(
-          JSON.stringify({
-            allowedToRequestCode: true,
-            verified: false,
-            requestedInformation: ['pushChallenge', 'captcha'],
-            id: 'fake-session-A',
-          })
-        ),
-      });
+      Native.TESTING_FakeChatRemoteEnd_SendServerResponse(
+        fakeRemote,
+        newNativeHandle(
+          Native.TESTING_FakeChatResponse_Create(
+            firstRequest.requestId,
+            200,
+            'OK',
+            ['content-type: application/json'],
+            Buffer.from(
+              JSON.stringify({
+                allowedToRequestCode: true,
+                verified: false,
+                requestedInformation: ['pushChallenge', 'captcha'],
+                id: 'fake-session-A',
+              })
+            )
+          )
+        )
+      );
 
       const session = await createSession;
       expect(session.sessionId).to.eq('fake-session-A');
@@ -291,13 +280,19 @@ describe('Registration client', () => {
         languages: ['fr-CA'],
       });
 
-      const secondRequest = await fakeRemote.assertReceiveIncomingRequest();
+      const secondRequestHandle =
+        await Native.TESTING_FakeChatRemoteEnd_ReceiveIncomingRequest(
+          tokio,
+          fakeRemote
+        );
+      assert(secondRequestHandle !== null);
+      const secondRequest = new InternalRequest(secondRequestHandle);
 
       expect(secondRequest.verb).to.eq('POST');
       expect(secondRequest.path).to.eq(
         '/v1/verification/session/fake-session-A/code'
       );
-      expect(new TextDecoder().decode(secondRequest.body)).to.eq(
+      expect(secondRequest.body.toString()).to.eq(
         '{"transport":"voice","client":"libsignal test"}'
       );
       expect(secondRequest.headers).to.deep.eq(
@@ -307,19 +302,25 @@ describe('Registration client', () => {
         ])
       );
 
-      fakeRemote.sendReplyTo(secondRequest, {
-        status: 200,
-        message: 'OK',
-        headers: ['content-type: application/json'],
-        body: Buffer.from(
-          JSON.stringify({
-            allowedToRequestCode: true,
-            verified: false,
-            requestedInformation: ['pushChallenge', 'captcha'],
-            id: 'fake-session-A',
-          })
-        ),
-      });
+      Native.TESTING_FakeChatRemoteEnd_SendServerResponse(
+        fakeRemote,
+        newNativeHandle(
+          Native.TESTING_FakeChatResponse_Create(
+            secondRequest.requestId,
+            200,
+            'OK',
+            ['content-type: application/json'],
+            Buffer.from(
+              JSON.stringify({
+                allowedToRequestCode: true,
+                verified: false,
+                requestedInformation: ['pushChallenge', 'captcha'],
+                id: 'fake-session-A',
+              })
+            )
+          )
+        )
+      );
 
       await requestVerification;
     });

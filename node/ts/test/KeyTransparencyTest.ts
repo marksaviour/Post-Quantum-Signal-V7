@@ -3,28 +3,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+import * as Native from '../../Native';
 import { config, expect, use } from 'chai';
-import chaiAsPromised from 'chai-as-promised';
-import { Buffer } from 'node:buffer';
-
-import * as Native from '../Native.js';
-import * as util from './util.js';
+import * as chaiAsPromised from 'chai-as-promised';
+import * as util from './util';
+import { UnauthenticatedChatConnection, Environment, Net } from '../net';
+import { Aci } from '../Address';
+import { PublicKey } from '../EcKeys';
 import {
-  UnauthenticatedChatConnection,
-  Environment,
-  Net,
-  TokioAsyncContext,
-} from '../net.js';
-import { Aci } from '../Address.js';
-import { PublicKey } from '../EcKeys.js';
-import {
+  ChatServiceInactive,
   ErrorCode,
   KeyTransparencyError,
   KeyTransparencyVerificationFailed,
   LibSignalErrorBase,
-} from '../Errors.js';
-import * as KT from '../net/KeyTransparency.js';
-import { MonitorMode } from '../net/KeyTransparency.js';
+} from '../Errors';
+import * as KT from '../net/KeyTransparency';
 
 use(chaiAsPromised);
 
@@ -38,18 +31,18 @@ const userAgent = 'libsignal-kt-test';
 const testAci = Aci.fromUuid('90c979fd-eab4-4a08-b6da-69dedeab9b29');
 const testIdentityKey = PublicKey.deserialize(
   Buffer.from(
-    '05cdcbb178067f0ddfd258bb21d006e0aa9c7ab132d9fb5e8b027de07d947f9d0c',
+    '05111f9464c1822c6a2405acf1c5a4366679dc3349fc8eb015c8d7260e3f771177',
     'hex'
   )
 );
 const testE164 = '+18005550100';
 const testUnidentifiedAccessKey = Buffer.from(
-  '108d84b71be307bdf101e380a1d7f2a2',
+  'c6f7c258c24d69538ea553b4a943c8d9',
   'hex'
 );
 
 const testUsernameHash = Buffer.from(
-  'dc711808c2cf66d5e6a33ce41f27d69d942d2e1ff4db22d39b42d2eff8d09746',
+  'd237a4b83b463ca7da58d4a16bf6a3ba104506eb412b235eb603ea10f467c655',
   'hex'
 );
 
@@ -60,7 +53,6 @@ const testRequest = {
     unidentifiedAccessKey: testUnidentifiedAccessKey,
   },
   usernameHash: testUsernameHash,
-  mode: MonitorMode.Other,
 };
 
 describe('KeyTransparency bridging', () => {
@@ -86,66 +78,14 @@ describe('KeyTransparency bridging', () => {
     expect(() => Native.TESTING_KeyTransChatSendError())
       .to.throw(LibSignalErrorBase)
       .that.satisfies(
-        (err: LibSignalErrorBase) => err.code === ErrorCode.IoError
+        (err: ChatServiceInactive) => err.code === ErrorCode.ChatServiceInactive
       );
-  });
-});
-
-describe('KeyTransparency network errors', () => {
-  it('can bridge network errors', async () => {
-    async function run(statusCode: number, headers: string[] = []) {
-      const tokio = new TokioAsyncContext(Native.TokioAsyncContext_new());
-      const [unauth, remote] = UnauthenticatedChatConnection.fakeConnect(
-        tokio,
-        {
-          onConnectionInterrupted: () => {},
-          onIncomingMessage: () => {},
-          onReceivedAlerts: () => {},
-          onQueueEmpty: () => {},
-        }
-      );
-      const client = new KT.ClientImpl(
-        tokio,
-        unauth._chatService,
-        Environment.Staging
-      );
-      const promise = client._getLatestDistinguished(new InMemoryKtStore(), {});
-
-      const request = await remote.assertReceiveIncomingRequest();
-
-      remote.sendReplyTo(request, {
-        status: statusCode,
-        headers: headers,
-      });
-      return promise;
-    }
-
-    // 429 without a retry-after header is a generic error
-    await expect(run(429)).to.be.rejected.and.eventually.have.property(
-      'code',
-      ErrorCode.IoError
-    );
-    await expect(
-      run(429, ['retry-after: 42'])
-    ).to.be.rejected.and.eventually.have.property(
-      'code',
-      ErrorCode.RateLimitedError
-    );
-    await expect(run(500)).to.be.rejected.and.eventually.have.property(
-      'code',
-      ErrorCode.IoError
-    );
   });
 });
 
 describe('KeyTransparency Integration', function (this: Mocha.Suite) {
-  // Avoid timing out due to slow network or KT environment
-  this.timeout(5000);
-
   before(() => {
-    const ignoreKtTests =
-      typeof process.env.LIBSIGNAL_TESTING_IGNORE_KT_TESTS !== 'undefined';
-    if (!process.env.LIBSIGNAL_TESTING_RUN_NONHERMETIC_TESTS || ignoreKtTests) {
+    if (!process.env.LIBSIGNAL_TESTING_RUN_NONHERMETIC_TESTS) {
       this.ctx.skip();
     }
   });
@@ -178,44 +118,42 @@ describe('KeyTransparency Integration', function (this: Mocha.Suite) {
     await kt.search(testRequest, store, {});
 
     const accountDataHistory = store.storage.get(testAci) ?? null;
-    if (accountDataHistory === null) {
-      expect.fail('accountDataHistory is null');
-    }
+    expect(accountDataHistory).to.not.be.null;
 
-    expect(accountDataHistory.length).to.equal(1);
+    expect(accountDataHistory!.length).to.equal(1);
 
     await kt.monitor(testRequest, store, {});
-    expect(accountDataHistory.length).to.equal(2);
+    expect(accountDataHistory!.length).to.equal(2);
   });
 });
 
 class InMemoryKtStore implements KT.Store {
-  storage: Map<Readonly<Aci>, Array<Readonly<Uint8Array>>>;
-  distinguished: Readonly<Uint8Array> | null;
+  storage: Map<Readonly<Aci>, Array<Readonly<Buffer>>>;
+  distinguished: Readonly<Buffer> | null;
 
   constructor() {
-    this.storage = new Map<Aci, Array<Readonly<Uint8Array>>>();
+    this.storage = new Map<Aci, Array<Readonly<Buffer>>>();
     this.distinguished = null;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async getLastDistinguishedTreeHead(): Promise<Uint8Array | null> {
+  async getLastDistinguishedTreeHead(): Promise<Buffer | null> {
     return this.distinguished;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async setLastDistinguishedTreeHead(bytes: Readonly<Uint8Array> | null) {
+  async setLastDistinguishedTreeHead(bytes: Readonly<Buffer> | null) {
     this.distinguished = bytes;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async getAccountData(aci: Aci): Promise<Uint8Array | null> {
+  async getAccountData(aci: Aci): Promise<Buffer | null> {
     const allVersions = this.storage.get(aci) ?? [];
     return allVersions.at(-1) ?? null;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async setAccountData(aci: Aci, bytes: Readonly<Uint8Array>) {
+  async setAccountData(aci: Aci, bytes: Readonly<Buffer>) {
     const allVersions = this.storage.get(aci) ?? [];
     allVersions.push(bytes);
     this.storage.set(aci, allVersions);

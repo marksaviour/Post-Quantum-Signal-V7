@@ -48,7 +48,7 @@ impl<T> BorrowedSliceOf<T> {
             return Ok(&[]);
         }
 
-        Ok(unsafe { std::slice::from_raw_parts(self.base, self.length) })
+        Ok(std::slice::from_raw_parts(self.base, self.length))
     }
 }
 
@@ -68,7 +68,7 @@ impl<T> BorrowedMutableSliceOf<T> {
             return Ok(&mut []);
         }
 
-        Ok(unsafe { std::slice::from_raw_parts_mut(self.base, self.length) })
+        Ok(std::slice::from_raw_parts_mut(self.base, self.length))
     }
 }
 
@@ -85,7 +85,7 @@ impl<T> OwnedBufferOf<T> {
     /// Converts back into a `Box`ed slice.
     ///
     /// Callers of this function must ensure that
-    /// - the `OwnedBufferOf` was originally created from `Box` (or `default()`)
+    /// - the `OwnedBufferOf` was originally created from `Box`
     /// - any C code operating on the buffer left all its elements in a valid
     ///   state.
     pub unsafe fn into_box(self) -> Box<[T]> {
@@ -94,16 +94,7 @@ impl<T> OwnedBufferOf<T> {
             return Box::new([]);
         }
 
-        unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(base, length)) }
-    }
-}
-
-impl<T> Default for OwnedBufferOf<T> {
-    fn default() -> Self {
-        Self {
-            base: std::ptr::null_mut(),
-            length: 0,
-        }
+        Box::from_raw(std::slice::from_raw_parts_mut(base, length))
     }
 }
 
@@ -114,24 +105,6 @@ impl<T> From<Box<[T]>> for OwnedBufferOf<T> {
             base: raw.as_mut_ptr(),
             length: raw.len(),
         }
-    }
-}
-
-/// A helper trait for types that need to be explicitly destroyed, similar to Neon's `Finalize`.
-///
-/// Meant for use with [`OwnedCallbackStruct`] and the `bridge_callbacks` macro (all
-/// `bridge_callbacks` FFI structs implement `FfiDestroyable`).
-pub trait FfiDestroyable {
-    fn destroy(&mut self);
-}
-
-/// A wrapper around a `bridge_callbacks` struct that calls the `destroy` function on Drop.
-#[derive(derive_more::Deref, derive_more::DerefMut)]
-pub struct OwnedCallbackStruct<T: FfiDestroyable>(pub T);
-
-impl<T: FfiDestroyable> Drop for OwnedCallbackStruct<T> {
-    fn drop(&mut self) {
-        self.0.destroy();
     }
 }
 
@@ -158,8 +131,8 @@ impl BytestringArray {
     pub unsafe fn into_boxed_parts(self) -> (Box<[u8]>, Box<[usize]>) {
         let Self { bytes, lengths } = self;
 
-        let bytes = unsafe { bytes.into_box() };
-        let lengths = unsafe { lengths.into_box() };
+        let bytes = bytes.into_box();
+        let lengths = lengths.into_box();
         (bytes, lengths)
     }
 }
@@ -180,56 +153,13 @@ impl<S: AsRef<[u8]>> FromIterator<S> for BytestringArray {
     }
 }
 
-impl BorrowedBytestringArray {
-    /// Allows iterating over the segments.
-    ///
-    /// SAFETY: Must be constructed correctly and refer to valid memory.
-    unsafe fn iter(&self) -> Result<impl ExactSizeIterator<Item = &[u8]>, NullPointerError> {
-        let BorrowedBytestringArray { bytes, lengths } = self;
-        let (mut bytes, lengths) = unsafe { (bytes.as_slice()?, lengths.as_slice()?) };
-
-        // Note that this iterator will support DoubleEndedIterator, but we must not expose that to
-        // callers, since we have a stateful iteration happening here.
-        Ok(lengths.iter().map(move |length| {
-            let next;
-            (next, bytes) = bytes.split_at(*length);
-            next
-        }))
-    }
-}
-
 #[repr(C)]
 pub struct OptionalBorrowedSliceOf<T> {
     pub present: bool,
     pub value: BorrowedSliceOf<T>,
 }
 
-/// A wrapper type for raw UUIDs, because C treats arrays specially in argument position.
-#[repr(C)]
-pub struct Uuid {
-    pub bytes: [u8; 16],
-}
-
-#[derive(Default)]
-#[repr(C)]
-pub struct OptionalUuid {
-    pub present: bool,
-    pub bytes: [u8; 16],
-}
-
-#[repr(C)]
-pub struct PairOf<A, B> {
-    pub first: A,
-    pub second: B,
-}
-
-#[repr(C)]
-#[derive(Default)]
-pub struct OptionalPairOf<A, B> {
-    pub present: bool,
-    pub first: A,
-    pub second: B,
-}
+pub type OptionalUuid = [u8; 17];
 
 #[repr(C)]
 #[derive(Debug)]
@@ -315,22 +245,6 @@ pub enum FfiPublicKeyType {
     Kyber,
 }
 
-#[repr(C)]
-pub struct FfiMismatchedDevicesError {
-    pub account: ServiceIdFixedWidthBinaryBytes,
-    pub missing_devices: OwnedBufferOf<u32>,
-    pub extra_devices: OwnedBufferOf<u32>,
-    pub stale_devices: OwnedBufferOf<u32>,
-}
-
-impl FfiMismatchedDevicesError {
-    pub unsafe fn free_buffers(&mut self) {
-        _ = unsafe { std::mem::take(&mut self.missing_devices).into_box() };
-        _ = unsafe { std::mem::take(&mut self.extra_devices).into_box() };
-        _ = unsafe { std::mem::take(&mut self.stale_devices).into_box() };
-    }
-}
-
 #[cfg_attr(doc, visibility::make(pub))]
 struct UnexpectedPanic(Box<dyn std::any::Any + Send>);
 
@@ -347,7 +261,7 @@ impl std::fmt::Debug for UnexpectedPanic {
 // Swift code considers all opaque pointers to be the same type, but
 // differentiates between the generated named struct types.
 #[repr(C)]
-#[derive(derive_more::From, zerocopy::FromZeros)]
+#[derive(derive_more::From)]
 #[derive_where(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct MutPointer<T> {
     raw: *mut T,
@@ -362,12 +276,6 @@ impl<T> MutPointer<T> {
         Self {
             raw: std::ptr::null_mut(),
         }
-    }
-}
-
-impl<T> Default for MutPointer<T> {
-    fn default() -> Self {
-        Self::null()
     }
 }
 
@@ -400,26 +308,20 @@ pub fn run_ffi_safe<F: FnOnce() -> Result<(), SignalFfiError> + std::panic::Unwi
         Err(r) => Err(UnexpectedPanic(r).into()),
     };
 
+    // When ThinBox is stabilized, we can return that instead of double-boxing.
+    // (Unfortunately, Box<dyn MyTrait> is two pointers wide and not FFI-safe.)
     match result {
         Ok(()) => std::ptr::null_mut(),
-        Err(e) => e.into_raw_box_for_ffi(),
+        Err(e) => Box::into_raw(Box::new(e)),
     }
 }
-
-/// Like [`std::panic::AssertUnwindSafe`], but FFI-compatible.
-#[derive(derive_more::Deref)]
-#[repr(transparent)]
-pub struct UnwindSafeArg<T>(pub T);
-
-impl<T> std::panic::UnwindSafe for UnwindSafeArg<T> {}
-impl<T> std::panic::RefUnwindSafe for UnwindSafeArg<T> {}
 
 pub unsafe fn native_handle_cast<T>(handle: *const T) -> Result<&'static T, SignalFfiError> {
     if handle.is_null() {
         return Err(NullPointerError.into());
     }
 
-    Ok(unsafe { &*(handle) })
+    Ok(&*(handle))
 }
 
 pub unsafe fn native_handle_cast_mut<T>(handle: *mut T) -> Result<&'static mut T, SignalFfiError> {
@@ -427,7 +329,7 @@ pub unsafe fn native_handle_cast_mut<T>(handle: *mut T) -> Result<&'static mut T
         return Err(NullPointerError.into());
     }
 
-    Ok(unsafe { &mut *handle })
+    Ok(&mut *handle)
 }
 
 pub unsafe fn write_result_to<T: ResultTypeInfo>(
@@ -437,9 +339,7 @@ pub unsafe fn write_result_to<T: ResultTypeInfo>(
     if ptr.is_null() {
         return Err(NullPointerError.into());
     }
-    unsafe {
-        *ptr = value.convert_into()?;
-    }
+    *ptr = value.convert_into()?;
     Ok(())
 }
 
@@ -451,11 +351,11 @@ macro_rules! ffi_bridge_handle_destroy {
     ( $typ:ty as $ffi_name:ident ) => {
         ::paste::paste! {
             #[cfg(feature = "ffi")]
-            #[unsafe(export_name = concat!(
+            #[export_name = concat!(
                 env!("LIBSIGNAL_BRIDGE_FN_PREFIX_FFI"),
                 stringify!($ffi_name),
                 "_destroy",
-            ))]
+            )]
             #[allow(non_snake_case)]
             pub unsafe extern "C" fn [<__bridge_handle_ffi_ $ffi_name _destroy>](
                 p: $crate::ffi::MutPointer<$typ>
@@ -468,7 +368,7 @@ macro_rules! ffi_bridge_handle_destroy {
                 let p = std::panic::AssertUnwindSafe(p.into_inner());
                 ffi::run_ffi_safe(|| {
                     if !p.is_null() {
-                        drop(unsafe { Box::from_raw(*p) });
+                        drop(Box::from_raw(*p));
                     }
                     Ok(())
                 })

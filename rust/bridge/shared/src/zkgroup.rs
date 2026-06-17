@@ -9,7 +9,6 @@ use libsignal_bridge_macros::*;
 use libsignal_bridge_types::zkgroup::validate_serialization;
 use libsignal_protocol::{Aci, Pni, ServiceId};
 use uuid::Uuid;
-pub(crate) use zkgroup::Timestamp;
 use zkgroup::auth::*;
 use zkgroup::backups::{
     BackupAuthCredential, BackupAuthCredentialPresentation, BackupAuthCredentialRequest,
@@ -20,6 +19,7 @@ use zkgroup::generic_server_params::*;
 use zkgroup::groups::*;
 use zkgroup::profiles::*;
 use zkgroup::receipts::*;
+pub(crate) use zkgroup::Timestamp;
 use zkgroup::*;
 
 use crate::support::*;
@@ -1073,11 +1073,7 @@ fn GroupSendEndorsementsResponse_IssueDeterministic(
     key_pair: &[u8],
     randomness: &[u8; RANDOMNESS_LEN],
 ) -> Vec<u8> {
-    assert!(
-        concatenated_group_member_ciphertexts
-            .len()
-            .is_multiple_of(UUID_CIPHERTEXT_LEN)
-    );
+    assert!(concatenated_group_member_ciphertexts.len() % UUID_CIPHERTEXT_LEN == 0);
     let user_id_ciphertexts = concatenated_group_member_ciphertexts
         .chunks_exact(UUID_CIPHERTEXT_LEN)
         .map(|serialized| {
@@ -1146,11 +1142,7 @@ fn GroupSendEndorsementsResponse_ReceiveAndCombineWithCiphertexts(
     let response = zkgroup::deserialize::<GroupSendEndorsementsResponse>(response_bytes)
         .expect("should have been parsed previously");
 
-    assert!(
-        concatenated_group_member_ciphertexts
-            .len()
-            .is_multiple_of(UUID_CIPHERTEXT_LEN)
-    );
+    assert!(concatenated_group_member_ciphertexts.len() % UUID_CIPHERTEXT_LEN == 0);
     let local_user_index = concatenated_group_member_ciphertexts
         .chunks_exact(UUID_CIPHERTEXT_LEN)
         .position(|serialized| serialized == local_user_ciphertext)

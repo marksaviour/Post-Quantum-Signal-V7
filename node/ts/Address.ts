@@ -3,10 +3,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import * as Native from './Native.js';
+import * as Native from '../Native';
 
 import * as uuid from 'uuid';
-import { Buffer } from 'node:buffer';
 
 export enum ServiceIdKind {
   Aci = 0,
@@ -22,10 +21,10 @@ const SERVICE_ID_FIXED_WIDTH_BINARY_LEN = 17;
  * user on the Signal service.
  */
 export abstract class ServiceId extends Object {
-  private readonly serviceIdFixedWidthBinary: Uint8Array;
+  private readonly serviceIdFixedWidthBinary: Buffer;
 
   // This has to be public for `InstanceType<T>`, which we use below.
-  constructor(serviceIdFixedWidthBinary: Uint8Array) {
+  constructor(serviceIdFixedWidthBinary: Buffer) {
     super();
     if (serviceIdFixedWidthBinary.length != SERVICE_ID_FIXED_WIDTH_BINARY_LEN) {
       throw new TypeError('invalid Service-Id-FixedWidthBinary');
@@ -38,22 +37,22 @@ export abstract class ServiceId extends Object {
     // Because ServiceId is abstract, and TypeScript won't let us construct an abstract class.
     // Strictly speaking we don't need the 'typeof' and 'InstanceType',
     // but it's more consistent with the factory methods below.
-    this: new (serviceIdFixedWidthBinary: Uint8Array) => InstanceType<T>,
+    this: new (serviceIdFixedWidthBinary: Buffer) => InstanceType<T>,
     uuidBytes: ArrayLike<number>,
     kind: ServiceIdKind
   ): InstanceType<T> {
-    const buffer = new Uint8Array(SERVICE_ID_FIXED_WIDTH_BINARY_LEN);
+    const buffer = Buffer.alloc(SERVICE_ID_FIXED_WIDTH_BINARY_LEN);
     buffer[0] = kind;
     buffer.set(uuidBytes, 1);
     return new this(buffer);
   }
 
-  getServiceIdBinary(): Uint8Array {
+  getServiceIdBinary(): Buffer {
     return Native.ServiceId_ServiceIdBinary(this.serviceIdFixedWidthBinary);
   }
 
-  getServiceIdFixedWidthBinary(): Uint8Array {
-    return Uint8Array.from(this.serviceIdFixedWidthBinary);
+  getServiceIdFixedWidthBinary(): Buffer {
+    return Buffer.from(this.serviceIdFixedWidthBinary);
   }
 
   getServiceIdString(): string {
@@ -76,7 +75,7 @@ export abstract class ServiceId extends Object {
 
   static parseFromServiceIdFixedWidthBinary<T extends typeof ServiceId>(
     this: T,
-    serviceIdFixedWidthBinary: Uint8Array
+    serviceIdFixedWidthBinary: Buffer
   ): InstanceType<T> {
     let result: ServiceId;
     switch (serviceIdFixedWidthBinary[0]) {
@@ -94,7 +93,7 @@ export abstract class ServiceId extends Object {
 
   static parseFromServiceIdBinary<T extends typeof ServiceId>(
     this: T,
-    serviceIdBinary: Uint8Array
+    serviceIdBinary: Buffer
   ): InstanceType<T> {
     const result = ServiceId.parseFromServiceIdFixedWidthBinary(
       Native.ServiceId_ParseFromServiceIdBinary(serviceIdBinary)
@@ -116,12 +115,14 @@ export abstract class ServiceId extends Object {
     return uuid.stringify(this.serviceIdFixedWidthBinary, 1);
   }
 
-  getRawUuidBytes(): Uint8Array {
-    return this.serviceIdFixedWidthBinary.subarray(1);
+  getRawUuidBytes(): Buffer {
+    return Buffer.from(this.serviceIdFixedWidthBinary.buffer, 1);
   }
 
   isEqual(other: ServiceId): boolean {
-    return ServiceId.comparator(this, other) == 0;
+    return this.serviceIdFixedWidthBinary.equals(
+      other.serviceIdFixedWidthBinary
+    );
   }
 
   /**
@@ -130,14 +131,11 @@ export abstract class ServiceId extends Object {
    * Compatible with <code>Array.sort</code>.
    */
   static comparator(this: void, lhs: ServiceId, rhs: ServiceId): number {
-    return Buffer.compare(
-      lhs.serviceIdFixedWidthBinary,
-      rhs.serviceIdFixedWidthBinary
-    );
+    return lhs.serviceIdFixedWidthBinary.compare(rhs.serviceIdFixedWidthBinary);
   }
 
-  static toConcatenatedFixedWidthBinary(serviceIds: ServiceId[]): Uint8Array {
-    const result = new Uint8Array(
+  static toConcatenatedFixedWidthBinary(serviceIds: ServiceId[]): Buffer {
+    const result = Buffer.alloc(
       serviceIds.length * SERVICE_ID_FIXED_WIDTH_BINARY_LEN
     );
     let offset = 0;
@@ -184,10 +182,6 @@ export class ProtocolAddress {
     return new ProtocolAddress(handle);
   }
 
-  /**
-   * @param name the identifer for the recipient, usually a `ServiceId`
-   * @param deviceId the identifier for the device; must be in the range 1-127 inclusive
-   */
   static new(name: string | ServiceId, deviceId: number): ProtocolAddress {
     if (typeof name !== 'string') {
       name = name.getServiceIdString();

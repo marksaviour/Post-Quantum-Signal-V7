@@ -15,10 +15,10 @@ use crate::backup::serialize::UnorderedList;
 use crate::backup::time::Duration;
 use crate::backup::{serialize, uuid_bytes_to_aci};
 use crate::proto::backup::{
-    self as proto, GenericGroupUpdate, GroupAdminStatusUpdate, GroupAnnouncementOnlyChangeUpdate,
-    GroupAttributesAccessLevelChangeUpdate, GroupAvatarUpdate, GroupCreationUpdate,
-    GroupDescriptionUpdate, GroupExpirationTimerUpdate, GroupInvitationAcceptedUpdate,
-    GroupInvitationDeclinedUpdate, GroupInvitationRevokedUpdate,
+    self as proto, group_invitation_revoked_update, GenericGroupUpdate, GroupAdminStatusUpdate,
+    GroupAnnouncementOnlyChangeUpdate, GroupAttributesAccessLevelChangeUpdate, GroupAvatarUpdate,
+    GroupCreationUpdate, GroupDescriptionUpdate, GroupExpirationTimerUpdate,
+    GroupInvitationAcceptedUpdate, GroupInvitationDeclinedUpdate, GroupInvitationRevokedUpdate,
     GroupInviteLinkAdminApprovalUpdate, GroupInviteLinkDisabledUpdate,
     GroupInviteLinkEnabledUpdate, GroupInviteLinkResetUpdate, GroupJoinRequestApprovalUpdate,
     GroupJoinRequestCanceledUpdate, GroupJoinRequestUpdate, GroupMemberAddedUpdate,
@@ -28,7 +28,6 @@ use crate::proto::backup::{
     GroupUnknownInviteeUpdate, GroupV2MigrationDroppedMembersUpdate,
     GroupV2MigrationInvitedMembersUpdate, GroupV2MigrationSelfInvitedUpdate,
     GroupV2MigrationUpdate, SelfInvitedOtherUserToGroupUpdate, SelfInvitedToGroupUpdate,
-    group_invitation_revoked_update,
 };
 
 /// Implements `TryFrom<$MESSAGE>` for [`GroupChatUpdate`].
@@ -84,8 +83,7 @@ macro_rules! TryFromProto {
 
 /// Validated version of [`proto::group_change_chat_update::update::Update`].
 #[serde_as]
-// TODO: expect fails to see through the macros as of nightly-2026-02-11
-#[allow(clippy::enum_variant_names, non_snake_case)] // names taken from proto message.
+#[expect(clippy::enum_variant_names, non_snake_case)] // names taken from proto message.
 #[derive(Debug, serde::Serialize)]
 #[macro_rules_derive(TryFromProto)]
 #[cfg_attr(test, derive(PartialEq))]

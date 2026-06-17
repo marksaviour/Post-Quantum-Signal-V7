@@ -6,16 +6,13 @@
 use std::result::Result;
 use std::time::{Duration, SystemTime};
 
-use bitflags::bitflags;
 use prost::Message;
-use rand::{CryptoRng, Rng};
 use subtle::ConstantTimeEq;
 
-use crate::proto::storage::{RecordStructure, SessionStructure, session_structure};
-use crate::protocol::CIPHERTEXT_MESSAGE_PRE_KYBER_VERSION;
+use crate::proto::storage::{session_structure, RecordStructure, SessionStructure};
 use crate::ratchet::{ChainKey, MessageKeyGenerator, RootKey};
 use crate::state::{KyberPreKeyId, PreKeyId, SignedPreKeyId};
-use crate::{IdentityKey, KeyPair, PrivateKey, PublicKey, SignalProtocolError, consts, kem};
+use crate::{consts, kem, IdentityKey, KeyPair, PrivateKey, PublicKey, SignalProtocolError};
 
 /// A distinct error type to keep from accidentally propagating deserialization errors.
 #[derive(Debug)]
@@ -38,9 +35,6 @@ pub(crate) struct UnacknowledgedPreKeyMessageItems<'a> {
     pre_key_id: Option<PreKeyId>,
     signed_pre_key_id: SignedPreKeyId,
     base_key: PublicKey,
-    // Although we require PQXDH for all new sessions now,
-    // we may in theory have an existing X3DH unacknowledged session,
-    // so we leave these optional for now.
     kyber_pre_key_id: Option<KyberPreKeyId>,
     kyber_ciphertext: Option<&'a [u8]>,
     timestamp: SystemTime,
@@ -92,42 +86,6 @@ impl<'a> UnacknowledgedPreKeyMessageItems<'a> {
     }
 }
 
-bitflags! {
-    /// Specifies which criteria make a session "usable" beyond simply having a present sender
-    /// chain.
-    ///
-    /// These requirements are conjunctive, i.e. specifying `NotStale | EstablishedWithPqxdh` means
-    /// the session must be neither stale nor established with X3DH.
-    ///
-    /// This struct is generated using the `bitflags` crate; the [`Flags`](::bitflags::Flags) trait
-    /// provides most of its API surface. It can also use "classic" C bitflag syntax, with `|` for
-    /// union and `&` for intersection (as shown above).
-    #[repr(transparent)]
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    pub struct SessionUsabilityRequirements : u32 {
-        /// Requires that a session not be stale.
-        ///
-        /// A non-stale session is one of the following:
-        /// - "incoming", i.e. started by the peer
-        /// - "acknowledged", i.e. started locally but received a response
-        /// - no more than a few weeks old (the exact time is chosen by libsignal)
-        const NotStale = 1 << 0;
-        /// Requires that a session was established using PQXDH (or newer) rather than X3DH/X4DH.
-        ///
-        /// This includes unacknowledged sessions that are using PQXDH, since if they get a
-        /// response, the peer is confirmed to be using PQXDH as well.
-        const EstablishedWithPqxdh = 1 << 1;
-        /// Requires that a session is using SPQR.
-        ///
-        /// **Warning:** This allows unacknowledged sessions that include SPQR in their PreKey
-        /// messages. If the peer downgrades the session (by discarding the SPQR information) and
-        /// the local client allows it, a session that is previously considered "usable" can become
-        /// "not usable" upon receiving a response. Therefore, this should not be used to determine
-        /// whether a session is usable unless future downgrades will also be rejected.
-        const Spqr = 1 << 2;
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct SessionState {
     session: SessionStructure,
@@ -144,7 +102,6 @@ impl SessionState {
         their_identity: &IdentityKey,
         root_key: &RootKey,
         alice_base_key: &PublicKey,
-        pq_ratchet_state: spqr::SerializedState,
     ) -> Self {
         Self {
             session: SessionStructure {
@@ -160,7 +117,6 @@ impl SessionState {
                 remote_registration_id: 0,
                 local_registration_id: 0,
                 alice_base_key: alice_base_key.serialize().into_vec(),
-                pq_ratchet_state,
             },
         }
     }
@@ -249,32 +205,14 @@ impl SessionState {
         }
     }
 
-    pub fn has_usable_sender_chain(
-        &self,
-        now: SystemTime,
-        requirements: SessionUsabilityRequirements,
-    ) -> Result<bool, InvalidSessionError> {
+    pub fn has_usable_sender_chain(&self, now: SystemTime) -> Result<bool, InvalidSessionError> {
         if self.session.sender_chain.is_none() {
             return Ok(false);
         }
-        if requirements.contains(SessionUsabilityRequirements::NotStale) {
-            if let Some(pending_pre_key) = &self.session.pending_pre_key {
-                let creation_timestamp =
-                    SystemTime::UNIX_EPOCH + Duration::from_secs(pending_pre_key.timestamp);
-                if creation_timestamp + consts::MAX_UNACKNOWLEDGED_SESSION_AGE < now {
-                    return Ok(false);
-                }
-            }
-        }
-        #[allow(clippy::collapsible_if)]
-        if requirements.contains(SessionUsabilityRequirements::EstablishedWithPqxdh) {
-            if self.session_version()? <= CIPHERTEXT_MESSAGE_PRE_KYBER_VERSION.into() {
-                return Ok(false);
-            }
-        }
-        #[allow(clippy::collapsible_if)]
-        if requirements.contains(SessionUsabilityRequirements::Spqr) {
-            if self.pq_ratchet_state().is_empty() {
+        if let Some(pending_pre_key) = &self.session.pending_pre_key {
+            let creation_timestamp =
+                SystemTime::UNIX_EPOCH + Duration::from_secs(pending_pre_key.timestamp);
+            if creation_timestamp + consts::MAX_UNACKNOWLEDGED_SESSION_AGE < now {
                 return Ok(false);
             }
         }
@@ -535,7 +473,7 @@ impl SessionState {
 
     pub(crate) fn unacknowledged_pre_key_message_items(
         &self,
-    ) -> Result<Option<UnacknowledgedPreKeyMessageItems<'_>>, InvalidSessionError> {
+    ) -> Result<Option<UnacknowledgedPreKeyMessageItems>, InvalidSessionError> {
         if let Some(ref pending_pre_key) = self.session.pending_pre_key {
             Ok(Some(UnacknowledgedPreKeyMessageItems::new(
                 pending_pre_key.pre_key_id.map(Into::into),
@@ -566,7 +504,6 @@ impl SessionState {
             remote_registration_id: _remote_registration_id,
             local_registration_id: _local_registration_id,
             alice_base_key: _alice_base_key,
-            pq_ratchet_state: _pq_ratchet_state,
         } = &self.session;
         // ####### IMPORTANT #######
         // Don't forget to clean up new pending fields.
@@ -596,28 +533,6 @@ impl SessionState {
             .pending_kyber_pre_key
             .as_ref()
             .map(|pending| &pending.ciphertext)
-    }
-
-    pub(crate) fn pq_ratchet_recv(
-        &mut self,
-        msg: &spqr::SerializedMessage,
-    ) -> Result<spqr::MessageKey, spqr::Error> {
-        let spqr::Recv { state, key } = spqr::recv(&self.session.pq_ratchet_state, msg)?;
-        self.session.pq_ratchet_state = state;
-        Ok(key)
-    }
-
-    pub(crate) fn pq_ratchet_send<R: Rng + CryptoRng>(
-        &mut self,
-        csprng: &mut R,
-    ) -> Result<(spqr::SerializedMessage, spqr::MessageKey), spqr::Error> {
-        let spqr::Send { state, key, msg } = spqr::send(&self.session.pq_ratchet_state, csprng)?;
-        self.session.pq_ratchet_state = state;
-        Ok((msg, key))
-    }
-
-    pub(crate) fn pq_ratchet_state(&self) -> &spqr::SerializedState {
-        &self.session.pq_ratchet_state
     }
 }
 
@@ -778,10 +693,6 @@ impl SessionRecord {
         Ok(record.encode_to_vec())
     }
 
-    pub fn current_pq_state(&self) -> Option<&spqr::SerializedState> {
-        self.current_session.as_ref().map(|s| s.pq_ratchet_state())
-    }
-
     pub fn remote_registration_id(&self) -> Result<u32, SignalProtocolError> {
         Ok(self
             .session_state()
@@ -839,13 +750,9 @@ impl SessionRecord {
             .remote_identity_key_bytes()?)
     }
 
-    pub fn has_usable_sender_chain(
-        &self,
-        now: SystemTime,
-        requirements: SessionUsabilityRequirements,
-    ) -> Result<bool, SignalProtocolError> {
+    pub fn has_usable_sender_chain(&self, now: SystemTime) -> Result<bool, SignalProtocolError> {
         match &self.current_session {
-            Some(session) => Ok(session.has_usable_sender_chain(now, requirements)?),
+            Some(session) => Ok(session.has_usable_sender_chain(now)?),
             None => Ok(false),
         }
     }

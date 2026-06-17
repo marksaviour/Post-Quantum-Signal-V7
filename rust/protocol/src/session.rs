@@ -7,19 +7,17 @@ use std::time::SystemTime;
 
 use rand::{CryptoRng, Rng};
 
-use crate::protocol::CIPHERTEXT_MESSAGE_PRE_KYBER_VERSION;
 use crate::ratchet::{AliceSignalProtocolParameters, BobSignalProtocolParameters};
 use crate::state::GenericSignedPreKey;
 use crate::{
-    CiphertextMessageType, Direction, IdentityKey, IdentityKeyStore, KeyPair, KyberPreKeyId,
+    kem, ratchet, Direction, IdentityKey, IdentityKeyStore, KeyPair, KyberPreKeyId,
     KyberPreKeyStore, PreKeyBundle, PreKeyId, PreKeySignalMessage, PreKeyStore, ProtocolAddress,
-    Result, SessionRecord, SessionStore, SignalProtocolError, SignedPreKeyId, SignedPreKeyStore,
-    ratchet,
+    Result, SessionRecord, SessionStore, SignalProtocolError, SignedPreKeyStore,
 };
 
+#[derive(Default)]
 pub struct PreKeysUsed {
-    pub one_time_ec_pre_key_id: Option<PreKeyId>,
-    pub signed_ec_pre_key_id: SignedPreKeyId,
+    pub pre_key_id: Option<PreKeyId>,
     pub kyber_pre_key_id: Option<KyberPreKeyId>,
 }
 
@@ -51,7 +49,7 @@ pub async fn process_prekey<'a>(
     pre_key_store: &dyn PreKeyStore,
     signed_prekey_store: &dyn SignedPreKeyStore,
     kyber_prekey_store: &dyn KyberPreKeyStore,
-) -> Result<(Option<PreKeysUsed>, IdentityToSave<'a>)> {
+) -> Result<(PreKeysUsed, IdentityToSave<'a>)> {
     let their_identity_key = message.identity_key();
 
     if !identity_store
@@ -90,25 +88,13 @@ async fn process_prekey_impl(
     kyber_prekey_store: &dyn KyberPreKeyStore,
     pre_key_store: &dyn PreKeyStore,
     identity_store: &dyn IdentityKeyStore,
-) -> Result<Option<PreKeysUsed>> {
+) -> Result<PreKeysUsed> {
     if session_record.promote_matching_session(
         message.message_version() as u32,
         &message.base_key().serialize(),
     )? {
         // We've already set up a session for this message, we can exit early.
-        return Ok(None);
-    }
-
-    // Check this *after* looking for an existing session; since we have already performed XDH for
-    // such a session, enforcing PQXDH *now* would be silly.
-    if message.message_version() == CIPHERTEXT_MESSAGE_PRE_KYBER_VERSION {
-        // Specifically return InvalidMessage here rather than LegacyCiphertextVersion; the Signal
-        // Android app treats LegacyCiphertextVersion as a structural issue rather than a retryable
-        // one, and won't cause the sender and receiver to move over to a PQXDH session.
-        return Err(SignalProtocolError::InvalidMessage(
-            CiphertextMessageType::PreKey,
-            "X3DH no longer supported",
-        ));
+        return Ok(Default::default());
     }
 
     let our_signed_pre_key_pair = signed_prekey_store
@@ -116,24 +102,18 @@ async fn process_prekey_impl(
         .await?
         .key_pair()?;
 
-    let our_kyber_pre_key_pair = if let Some(kyber_pre_key_id) = message.kyber_pre_key_id() {
-        kyber_prekey_store
-            .get_kyber_pre_key(kyber_pre_key_id)
-            .await?
-            .key_pair()?
+    // Because async closures are unstable
+    let our_kyber_pre_key_pair: Option<kem::KeyPair>;
+    if let Some(kyber_pre_key_id) = message.kyber_pre_key_id() {
+        our_kyber_pre_key_pair = Some(
+            kyber_prekey_store
+                .get_kyber_pre_key(kyber_pre_key_id)
+                .await?
+                .key_pair()?,
+        );
     } else {
-        return Err(SignalProtocolError::InvalidMessage(
-            CiphertextMessageType::PreKey,
-            "missing pq pre-key ID",
-        ));
-    };
-    let kyber_ciphertext =
-        message
-            .kyber_ciphertext()
-            .ok_or(SignalProtocolError::InvalidMessage(
-                CiphertextMessageType::PreKey,
-                "missing pq ciphertext",
-            ))?;
+        our_kyber_pre_key_pair = None;
+    }
 
     let our_one_time_pre_key_pair = if let Some(pre_key_id) = message.pre_key_id() {
         log::info!("processing PreKey message from {remote_address}");
@@ -151,7 +131,7 @@ async fn process_prekey_impl(
         our_kyber_pre_key_pair,
         *message.identity_key(),
         *message.base_key(),
-        kyber_ciphertext,
+        message.kyber_ciphertext(),
     );
 
     let mut new_session = ratchet::initialize_bob_session(&parameters)?;
@@ -162,11 +142,10 @@ async fn process_prekey_impl(
     session_record.promote_state(new_session);
 
     let pre_keys_used = PreKeysUsed {
-        one_time_ec_pre_key_id: message.pre_key_id(),
-        signed_ec_pre_key_id: message.signed_pre_key_id(),
+        pre_key_id: message.pre_key_id(),
         kyber_pre_key_id: message.kyber_pre_key_id(),
     };
-    Ok(Some(pre_keys_used))
+    Ok(pre_keys_used)
 }
 
 pub async fn process_prekey_bundle<R: Rng + CryptoRng>(
@@ -195,11 +174,15 @@ pub async fn process_prekey_bundle<R: Rng + CryptoRng>(
         return Err(SignalProtocolError::SignatureValidationFailed);
     }
 
-    if !their_identity_key.public_key().verify_signature(
-        &bundle.kyber_pre_key_public()?.serialize(),
-        bundle.kyber_pre_key_signature()?,
-    ) {
-        return Err(SignalProtocolError::SignatureValidationFailed);
+    if let Some(kyber_public) = bundle.kyber_pre_key_public()? {
+        if !their_identity_key.public_key().verify_signature(
+            kyber_public.serialize().as_ref(),
+            bundle
+                .kyber_pre_key_signature()?
+                .expect("signature must be present"),
+        ) {
+            return Err(SignalProtocolError::SignatureValidationFailed);
+        }
     }
 
     let mut session_record = session_store
@@ -209,7 +192,6 @@ pub async fn process_prekey_bundle<R: Rng + CryptoRng>(
 
     let our_base_key_pair = KeyPair::generate(&mut csprng);
     let their_signed_prekey = bundle.signed_pre_key_public()?;
-    let their_kyber_prekey = bundle.kyber_pre_key_public()?;
 
     let their_one_time_prekey_id = bundle.pre_key_id()?;
 
@@ -221,10 +203,13 @@ pub async fn process_prekey_bundle<R: Rng + CryptoRng>(
         *their_identity_key,
         their_signed_prekey,
         their_signed_prekey,
-        their_kyber_prekey.clone(),
     );
     if let Some(key) = bundle.pre_key_public()? {
         parameters.set_their_one_time_pre_key(key);
+    }
+
+    if let Some(key) = bundle.kyber_pre_key_public()? {
+        parameters.set_their_kyber_pre_key(key);
     }
 
     let mut session = ratchet::initialize_alice_session(&parameters, csprng)?;
@@ -241,7 +226,10 @@ pub async fn process_prekey_bundle<R: Rng + CryptoRng>(
         &our_base_key_pair.public_key,
         now,
     );
-    session.set_unacknowledged_kyber_pre_key_id(bundle.kyber_pre_key_id()?);
+
+    if let Some(kyber_pre_key_id) = bundle.kyber_pre_key_id()? {
+        session.set_unacknowledged_kyber_pre_key_id(kyber_pre_key_id);
+    }
 
     session.set_local_registration_id(identity_store.get_local_registration_id().await?);
     session.set_remote_registration_id(bundle.registration_id()?);

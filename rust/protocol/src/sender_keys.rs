@@ -10,7 +10,7 @@ use prost::Message;
 
 use crate::crypto::hmac_sha256;
 use crate::proto::storage as storage_proto;
-use crate::{PrivateKey, PublicKey, SignalProtocolError, consts};
+use crate::{consts, PrivateKey, PublicKey, SignalProtocolError};
 
 /// A distinct error type to keep from accidentally propagating deserialization errors.
 #[derive(Debug)]
@@ -366,8 +366,8 @@ impl SenderKeyRecord {
 #[cfg(test)]
 mod sender_key_record_add_sender_key_state_tests {
     use itertools::Itertools;
-    use rand::TryRngCore as _;
     use rand::rngs::OsRng;
+    use rand::TryRngCore as _;
 
     use super::*;
     use crate::KeyPair;

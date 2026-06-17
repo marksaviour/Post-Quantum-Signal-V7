@@ -7,11 +7,35 @@ use std::marker::PhantomData;
 
 use jni::objects::{JObject, JValue};
 
+/// Takes a Java-esque class name of the form `org.signal.Outer::Inner` and turns it into a
+/// JNI-style name `org/signal/Outer$Inner`.
+#[macro_export]
+macro_rules! jni_class_name {
+    ( $arg_base:tt $(. $arg_rest:ident)+ $(:: $nested:ident)* ) => {
+        concat!(
+            stringify!($arg_base),
+            $("/", stringify!($arg_rest),)+
+            $("$", stringify!($nested),)*
+        )
+    }
+}
+
+#[test]
+fn test_jni_class_name() {
+    assert_eq!(jni_class_name!(foo.bar), "foo/bar");
+    assert_eq!(jni_class_name!(foo.bar.baz), "foo/bar/baz");
+    assert_eq!(jni_class_name!(foo.bar.baz::garply), "foo/bar/baz$garply");
+    assert_eq!(
+        jni_class_name!(foo.bar.baz::garply::qux),
+        "foo/bar/baz$garply$qux"
+    );
+}
+
 /// Converts a function or type signature to a JNI signature string.
 ///
 /// This macro uses Rust function syntax `(Foo, Bar) -> Baz`, and uses Rust syntax for Java arrays
-/// `[Foo]`, but otherwise uses Java names for types: `boolean`, `byte`, `void`. Inner classes are
-/// indicated with `::` rather than `.`.
+/// `[Foo]`, but otherwise uses Java names for types: `boolean`, `byte`, `void`. Like
+/// [`jni_class_name`], inner classes are indicated with `::` rather than `.`.
 #[macro_export]
 macro_rules! jni_signature {
     ( boolean ) => ("Z");
@@ -37,9 +61,7 @@ macro_rules! jni_signature {
     ( $arg_base:tt $(. $arg_rest:ident)+ $(:: $nested:ident)* ) => {
         concat!(
             "L",
-            stringify!($arg_base),
-            $("/", stringify!($arg_rest),)+
-            $("$", stringify!($nested),)*
+            $crate::jni_class_name!($arg_base $(. $arg_rest)* $(:: $nested)*),
             ";"
         )
     };
@@ -193,17 +215,15 @@ macro_rules! jni_return_type {
 /// Represents a return type, used by [`JniArgs`].
 ///
 /// This is an implementation detail of [`jni_args`] and [`JniArgs`]. Using a function type makes
-/// `JniArgs` covariant, which allows the compiler to be less strict about the lifetime of the
-/// result. Having a lifetime *input* allows the result to depend on the JNI environment, which is
-/// important for callbacks.
-pub type PhantomReturnType<'local, R> = PhantomData<fn(&'local ()) -> R>;
+/// `JniArgs` covariant, which allows the compiler to be less strict about the lifetime marker.
+pub type PhantomReturnType<R> = PhantomData<fn() -> R>;
 
 /// A JNI argument list, type-checked with its signature.
 #[derive(Debug, Clone, Copy)]
 pub struct JniArgs<'local, 'obj_ref, R, const LEN: usize> {
     pub sig: &'static str,
     pub args: [JValue<'local, 'obj_ref>; LEN],
-    pub _return: PhantomReturnType<'local, R>,
+    pub _return: PhantomReturnType<R>,
 }
 
 impl<'local, 'obj_ref, 'output, const LEN: usize> JniArgs<'local, 'obj_ref, JObject<'output>, LEN> {

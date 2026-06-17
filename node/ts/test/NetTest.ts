@@ -4,36 +4,32 @@
 //
 
 import { assert, config, expect, use } from 'chai';
-import chaiAsPromised from 'chai-as-promised';
-import sinon from 'sinon';
-import sinonChai from 'sinon-chai';
-import { fail } from 'node:assert';
-import { Buffer } from 'node:buffer';
-
-import * as util from './util.js';
-import { Aci, Pni } from '../Address.js';
-import * as Native from '../Native.js';
-import { ErrorCode, LibSignalErrorBase } from '../Errors.js';
+import * as chaiAsPromised from 'chai-as-promised';
+import * as sinon from 'sinon';
+import * as sinonChai from 'sinon-chai';
+import * as util from './util';
+import { Aci, Pni } from '../Address';
+import * as Native from '../../Native';
+import { ErrorCode, LibSignalErrorBase } from '../Errors';
 import {
   AuthenticatedChatConnection,
   buildHttpRequest,
-  BuildVariant,
   ChatConnection,
   ChatServerMessageAck,
   ChatServiceListener,
   Environment,
   Net,
-  ProvisioningConnection,
-  ProvisioningConnectionListener,
   SIGNAL_TLS_PROXY_SCHEME,
   TokioAsyncContext,
   UnauthenticatedChatConnection,
-} from '../net.js';
-import { CompletablePromise } from './util.js';
-import { newNativeHandle } from '../internal.js';
-import { FakeChatRemote } from '../net/FakeChat.js';
-
-const { TESTING_ConnectionManager_isUsingProxy } = Native;
+} from '../net';
+import {
+  ChatResponse,
+  TESTING_ConnectionManager_isUsingProxy,
+} from '../../Native';
+import { CompletablePromise } from './util';
+import { fail } from 'assert';
+import { newNativeHandle } from '../internal';
 
 use(chaiAsPromised);
 use(sinonChai);
@@ -59,7 +55,6 @@ describe('chat service api', () => {
     const cases: Array<[string, ErrorCode | object]> = [
       ['AppExpired', ErrorCode.AppExpired],
       ['DeviceDeregistered', ErrorCode.DeviceDelinked],
-      ['PossibleCaptiveNetwork', ErrorCode.PossibleCaptiveNetwork],
 
       ['WebSocketConnectionFailed', ErrorCode.IoError],
       ['Timeout', ErrorCode.IoError],
@@ -111,13 +106,13 @@ describe('chat service api', () => {
       ['content-type', 'application/octet-stream'],
       ['forwarded', '1.1.1.1'],
     ];
-    const expectedWithContent: Native.ChatResponse = {
+    const expectedWithContent: ChatResponse = {
       status: status,
       message: 'OK',
       headers: headers,
       body: Buffer.from('content'),
     };
-    const expectedWithoutContent: Native.ChatResponse = {
+    const expectedWithoutContent: ChatResponse = {
       status: status,
       message: 'OK',
       headers: headers,
@@ -322,9 +317,7 @@ describe('chat service api', () => {
         onConnectionInterrupted: (...args: [unknown]) =>
           onInterrupted.resolve(args),
       };
-      const chat = await net.connectUnauthenticatedChat(listener, {
-        languages: ['en'],
-      });
+      const chat = await net.connectUnauthenticatedChat(listener);
       await chat.disconnect();
       await onInterrupted;
       expect(onInterrupted.resolvedValue).to.eql([null]);
@@ -338,21 +331,6 @@ describe('chat service api', () => {
         env: Environment.Production,
         userAgent: userAgent,
       });
-      await connectChatUnauthenticated(net);
-    }).timeout(10000);
-
-    it('can connect unauthenticated over H2', async function () {
-      if (!process.env.LIBSIGNAL_TESTING_RUN_NONHERMETIC_TESTS) {
-        this.skip();
-      }
-      const net = new Net({
-        env: Environment.Production,
-        userAgent: userAgent,
-      });
-      net.setRemoteConfig(
-        new Map([['useH2ForUnauthChat', 'true']]),
-        BuildVariant.Beta
-      );
       await connectChatUnauthenticated(net);
     }).timeout(10000);
 
@@ -391,8 +369,9 @@ describe('chat service api', () => {
         this.skip();
       }
 
+      // The default TLS proxy config doesn't support staging, so we connect to production.
       const net = new Net({
-        env: Environment.Staging,
+        env: Environment.Production,
         userAgent: userAgent,
       });
       const [host = PROXY_SERVER, port = '443'] = PROXY_SERVER.split(':', 2);
@@ -409,8 +388,9 @@ describe('chat service api', () => {
         this.skip();
       }
 
+      // The default TLS proxy config doesn't support staging, so we connect to production.
       const net = new Net({
-        env: Environment.Staging,
+        env: Environment.Production,
         userAgent: userAgent,
       });
       const [host = PROXY_SERVER, port = '443'] = PROXY_SERVER.split(':', 2);
@@ -435,8 +415,9 @@ describe('chat service api', () => {
         this.skip();
       }
 
+      // The default TLS proxy config doesn't support staging, so we connect to production.
       const net = new Net({
-        env: Environment.Staging,
+        env: Environment.Production,
         userAgent: userAgent,
       });
 
@@ -511,14 +492,17 @@ describe('chat service api', () => {
 
       // a helper function to check that the message has been passed to the listener
       async function check(
-        serverRequest: Uint8Array,
+        serverRequest: Buffer,
         expectedMethod: sinon.SinonStub,
         expectedArguments: unknown[]
       ) {
         expectedMethod.reset();
         const completable = new CompletablePromise();
         expectedMethod.callsFake(completable.resolve);
-        fakeRemote.sendRawServerRequest(serverRequest);
+        Native.TESTING_FakeChatRemoteEnd_SendRawServerRequest(
+          fakeRemote,
+          serverRequest
+        );
         await completable.done();
         expect(expectedMethod).to.have.been.calledOnceWith(
           ...expectedArguments
@@ -526,13 +510,13 @@ describe('chat service api', () => {
       }
 
       await check(INCOMING_MESSAGE_1, listener.onIncomingMessage, [
-        new TextEncoder().encode('payload'),
+        Buffer.from('payload', 'utf8'),
         1000,
         sinon.match.object,
       ]);
 
       await check(INCOMING_MESSAGE_2, listener.onIncomingMessage, [
-        new TextEncoder().encode('payload'),
+        Buffer.from('payload', 'utf8'),
         2000,
         sinon.match.object,
       ]);
@@ -543,7 +527,7 @@ describe('chat service api', () => {
     it('messages arrive in order', async () => {
       const listener: ChatServiceListener = {
         onIncomingMessage(
-          _envelope: Uint8Array,
+          _envelope: Buffer,
           _timestamp: number,
           _ack: ChatServerMessageAck
         ): void {
@@ -564,6 +548,11 @@ describe('chat service api', () => {
         tokio,
         listener
       );
+      const sendRawServerRequest = (message: Buffer) =>
+        Native.TESTING_FakeChatRemoteEnd_SendRawServerRequest(
+          fakeRemote,
+          message
+        );
 
       const completable = new CompletablePromise();
       const callsToMake: Buffer[] = [
@@ -572,42 +561,45 @@ describe('chat service api', () => {
         INVALID_MESSAGE,
         INCOMING_MESSAGE_2,
       ];
-      const callsReceived: [string, unknown[]][] = [];
-      const callsExpected: [string, ((value: unknown) => void)[]][] = [
-        ['_received_alerts', [(value) => expect(value).deep.equals([])]],
+      const callsReceived: [string, (object | null)[]][] = [];
+      const callsExpected: [string, ((value: object | null) => void)[]][] = [
+        [
+          '_received_alerts',
+          [(value: object | null) => expect(value).deep.equals([])],
+        ],
         ['_incoming_message', []],
         ['_queue_empty', []],
         ['_incoming_message', []],
         [
           '_connection_interrupted',
           [
-            (error) =>
+            (error: object | null) =>
               expect(error)
                 .instanceOf(LibSignalErrorBase)
                 .property('code', ErrorCode.IoError),
           ],
         ],
       ];
-      const recordCall = function (name: string, ...args: unknown[]) {
+      const recordCall = function (name: string, ...args: (object | null)[]) {
         callsReceived.push([name, args]);
         if (callsReceived.length == callsExpected.length) {
           completable.complete();
         }
       };
       callsToMake.forEach((serverRequest) =>
-        fakeRemote.sendRawServerRequest(serverRequest)
+        sendRawServerRequest(serverRequest)
       );
-      fakeRemote.injectConnectionInterrupted();
+      Native.TESTING_FakeChatRemoteEnd_InjectConnectionInterrupted(fakeRemote);
       await completable.done();
 
       expect(callsReceived).to.have.lengthOf(callsExpected.length);
       callsReceived.forEach((element, index) => {
         const [call, args] = element;
-        const [expectedCall, argExpectations] = callsExpected[index];
+        const [expectedCall, expectedArgs] = callsExpected[index];
         expect(call).to.eql(expectedCall);
-        expect(args.length).to.eql(argExpectations.length);
+        expect(args.length).to.eql(expectedArgs.length);
         args.map((arg, i) => {
-          argExpectations[i](arg);
+          expectedArgs[i](arg);
         });
       });
     });
@@ -617,7 +609,7 @@ describe('chat service api', () => {
       const connectionInterruptedReasons: (object | null)[] = [];
       const listener: ChatServiceListener = {
         onIncomingMessage(
-          _envelope: Uint8Array,
+          _envelope: Buffer,
           _timestamp: number,
           _ack: ChatServerMessageAck
         ): void {
@@ -648,7 +640,7 @@ describe('chat service api', () => {
   describe('fake chat connection', () => {
     type FakeConnectFn = (
       tokio: TokioAsyncContext
-    ) => [ChatConnection, FakeChatRemote];
+    ) => [ChatConnection, Native.Wrapper<Native.FakeChatRemoteEnd>];
     const cases: Array<[string, FakeConnectFn]> = [
       [
         'authenticated',
@@ -682,13 +674,19 @@ describe('chat service api', () => {
             verb: 'PUT',
             path: '/some/path',
             headers: [['purpose', 'test request']] as [[string, string]],
-            body: Uint8Array.of(1, 1, 2, 3),
+            body: Buffer.of(1, 1, 2, 3),
           };
           const responseFuture = chat.fetch(request);
 
-          const requestFromServer =
-            await fakeRemote.assertReceiveIncomingRequest();
-
+          const requestFromServerWithId =
+            await Native.TESTING_FakeChatRemoteEnd_ReceiveIncomingRequest(
+              tokio,
+              fakeRemote
+            );
+          assert(requestFromServerWithId !== null);
+          const requestFromServer = new InternalRequest(
+            requestFromServerWithId
+          );
           expect(requestFromServer.verb).to.eq(request.verb);
           expect(requestFromServer.path).to.eq(request.path);
           expect(requestFromServer.body).to.deep.eq(request.body);
@@ -702,7 +700,8 @@ describe('chat service api', () => {
           // 3: {"Created"}
           // 5: {"purpose: test response"}
           // 4: {5}
-          fakeRemote.sendRawServerResponse(
+          Native.TESTING_FakeChatRemoteEnd_SendRawServerResponse(
+            fakeRemote,
             Buffer.from(
               'CAAQyQEaB0NyZWF0ZWQqFnB1cnBvc2U6IHRlc3QgcmVzcG9uc2UiAQU=',
               'base64'
@@ -715,119 +714,7 @@ describe('chat service api', () => {
           expect(responseFromServer)
             .property('headers')
             .to.deep.eq([['purpose', 'test response']]);
-          expect(responseFromServer)
-            .property('body')
-            .to.deep.eq(Uint8Array.of(5));
-        });
-      });
-    });
-  });
-
-  describe('fake provisioning connection', () => {
-    // The following payloads were generated via protoscope.
-    // % protoscope -s | base64
-    // The fields are described by chat_websocket.proto and chat_provisioning.proto in the
-    // libsignal-net crate.
-
-    // 1: {"PUT"}
-    // 2: {"/v1/address"}
-    // 3: {1: {"the address"}}
-    // 5: {"x-signal-timestamp: 1000"}
-    // 4: 1
-    const PUT_ADDRESS = Buffer.from(
-      'CgNQVVQSCy92MS9hZGRyZXNzGg0KC3RoZSBhZGRyZXNzKhh4LXNpZ25hbC10aW1lc3RhbXA6IDEwMDAgAQ==',
-      'base64'
-    );
-
-    // 1: {"PUT"}
-    // 2: {"/v1/message"}
-    // 3: {"encoded envelope"}
-    // 5: {"x-signal-timestamp: 1000"}
-    // 4: 2
-    const PUT_ENVELOPE = Buffer.from(
-      'CgNQVVQSCy92MS9tZXNzYWdlGhBlbmNvZGVkIGVudmVsb3BlKhh4LXNpZ25hbC10aW1lc3RhbXA6IDEwMDAgAg==',
-      'base64'
-    );
-
-    // 1: {"PUT"}
-    // 2: {"/invalid"}
-    // 4: 10
-    const INVALID_MESSAGE = Buffer.from('CgNQVVQSCC9pbnZhbGlkIAo=', 'base64');
-
-    it('receives callbacks', async () => {
-      const listener: ProvisioningConnectionListener = {
-        onReceivedAddress(address: string, ack: ChatServerMessageAck): void {
-          recordCall('onReceivedAddress', address);
-          ack.send(200);
-        },
-        onReceivedEnvelope(
-          envelope: Uint8Array,
-          ack: ChatServerMessageAck
-        ): void {
-          recordCall('onReceivedEnvelope', envelope);
-          ack.send(200);
-        },
-        onConnectionInterrupted(cause: object | null): void {
-          recordCall('onConnectionInterrupted', cause);
-        },
-      };
-      const tokio = new TokioAsyncContext(Native.TokioAsyncContext_new());
-      const [_chat, fakeRemote] = ProvisioningConnection.fakeConnect(
-        tokio,
-        listener
-      );
-
-      const completable = new CompletablePromise();
-      const callsToMake: Buffer[] = [
-        PUT_ADDRESS,
-        INVALID_MESSAGE,
-        PUT_ENVELOPE,
-      ];
-      const callsReceived: [string, unknown[]][] = [];
-      const callsExpected: [string, ((value: unknown) => void)[]][] = [
-        [
-          'onReceivedAddress',
-          [(value) => expect(value).deep.equals('the address')],
-        ],
-        [
-          'onReceivedEnvelope',
-          [
-            (value) =>
-              expect(value).deep.equals(
-                Buffer.from('encoded envelope', 'utf8')
-              ),
-          ],
-        ],
-        [
-          'onConnectionInterrupted',
-          [
-            (error) =>
-              expect(error)
-                .instanceOf(LibSignalErrorBase)
-                .property('code', ErrorCode.IoError),
-          ],
-        ],
-      ];
-      const recordCall = function (name: string, ...args: unknown[]) {
-        callsReceived.push([name, args]);
-        if (callsReceived.length == callsExpected.length) {
-          completable.complete();
-        }
-      };
-      callsToMake.forEach((serverRequest) =>
-        fakeRemote.sendRawServerRequest(serverRequest)
-      );
-      fakeRemote.injectConnectionInterrupted();
-      await completable.done();
-
-      expect(callsReceived).to.have.lengthOf(callsExpected.length);
-      callsReceived.forEach((element, index) => {
-        const [call, args] = element;
-        const [expectedCall, argExpectations] = callsExpected[index];
-        expect(call).to.eql(expectedCall);
-        expect(args.length).to.eql(argExpectations.length);
-        args.map((arg, i) => {
-          argExpectations[i](arg);
+          expect(responseFromServer).property('body').to.deep.eq(Buffer.of(5));
         });
       });
     });
@@ -915,6 +802,11 @@ describe('cdsi lookup', () => {
           ErrorCode.Generic,
           'attestation data invalid: fake reason',
         ],
+        [
+          'InvalidResponse',
+          ErrorCode.IoError,
+          'invalid response received from the server',
+        ],
         ['RetryAfter42Seconds', ErrorCode.RateLimitedError, 'retry after 42s'],
         [
           'InvalidToken',
@@ -927,20 +819,21 @@ describe('cdsi lookup', () => {
           'request was invalid: fake reason',
         ],
         [
-          'TcpConnectFailed',
+          'Parse',
           ErrorCode.IoError,
-          'transport failed: Failed to establish TCP connection to any of the IPs',
+          'failed to parse the response from the server',
+        ],
+        [
+          'ConnectDnsFailed',
+          ErrorCode.IoError,
+          'transport failed: DNS lookup failed',
         ],
         [
           'WebSocketIdleTooLong',
           ErrorCode.IoError,
           'websocket error: channel was idle for too long',
         ],
-        [
-          'AllConnectionAttemptsFailed',
-          ErrorCode.IoError,
-          'no connection attempts succeeded before timeout',
-        ],
+        ['ConnectionTimedOut', ErrorCode.IoError, 'connect attempt timed out'],
         ['ServerCrashed', ErrorCode.IoError, 'server error: crashed'],
       ];
       cases.forEach((testCase) => {
@@ -955,3 +848,36 @@ describe('cdsi lookup', () => {
     });
   });
 });
+
+export class InternalRequest implements Native.Wrapper<Native.HttpRequest> {
+  readonly _nativeHandle: Native.HttpRequest;
+  readonly requestId: bigint;
+
+  constructor(fakeRequest: Native.FakeChatSentRequest) {
+    const wrapper = newNativeHandle(fakeRequest);
+    this._nativeHandle =
+      Native.TESTING_FakeChatSentRequest_TakeHttpRequest(wrapper);
+    this.requestId = Native.TESTING_FakeChatSentRequest_RequestId(wrapper);
+  }
+
+  public get verb(): string {
+    return Native.TESTING_ChatRequestGetMethod(this);
+  }
+
+  public get path(): string {
+    return Native.TESTING_ChatRequestGetPath(this);
+  }
+
+  public get headers(): Map<string, string> {
+    const names = Native.TESTING_ChatRequestGetHeaderNames(this);
+    return new Map(
+      names.map((name) => {
+        return [name, Native.TESTING_ChatRequestGetHeaderValue(this, name)];
+      })
+    );
+  }
+
+  public get body(): Buffer {
+    return Native.TESTING_ChatRequestGetBody(this);
+  }
+}

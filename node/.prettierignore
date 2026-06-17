@@ -1,4 +1,4 @@
 build/**
 dist/**
-ts/Native.ts
+Native.d.ts
 ts/test/canonical-backup.expected.json

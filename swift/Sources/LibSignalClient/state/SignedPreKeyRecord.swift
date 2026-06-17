@@ -7,24 +7,19 @@ import Foundation
 import SignalFfi
 
 public class SignedPreKeyRecord: ClonableHandleOwner<SignalMutPointerSignedPreKeyRecord> {
-    override internal class func destroyNativeHandle(
-        _ handle: NonNull<SignalMutPointerSignedPreKeyRecord>
-    ) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerSignedPreKeyRecord>) -> SignalFfiErrorRef? {
         return signal_signed_pre_key_record_destroy(handle.pointer)
     }
 
-    override internal class func cloneNativeHandle(
-        _ newHandle: inout SignalMutPointerSignedPreKeyRecord,
-        currentHandle: SignalConstPointerSignedPreKeyRecord
-    ) -> SignalFfiErrorRef? {
+    override internal class func cloneNativeHandle(_ newHandle: inout SignalMutPointerSignedPreKeyRecord, currentHandle: SignalConstPointerSignedPreKeyRecord) -> SignalFfiErrorRef? {
         return signal_signed_pre_key_record_clone(&newHandle, currentHandle)
     }
 
     public convenience init<Bytes: ContiguousBytes>(bytes: Bytes) throws {
-        let handle = try bytes.withUnsafeBorrowedBuffer { bytes in
-            try invokeFnReturningValueByPointer(.init()) {
-                signal_signed_pre_key_record_deserialize($0, bytes)
-            }
+        let handle = try bytes.withUnsafeBorrowedBuffer {
+            var result = SignalMutPointerSignedPreKeyRecord()
+            try checkError(signal_signed_pre_key_record_deserialize(&result, $0))
+            return result
         }
         self.init(owned: NonNull(handle)!)
     }
@@ -36,28 +31,26 @@ public class SignedPreKeyRecord: ClonableHandleOwner<SignalMutPointerSignedPreKe
         signature: Bytes
     ) throws {
         let publicKey = privateKey.publicKey
-        let result = try withAllBorrowed(publicKey, privateKey, .bytes(signature)) {
-            publicKeyHandle,
-            privateKeyHandle,
-            signature in
-            try invokeFnReturningValueByPointer(.init()) {
-                signal_signed_pre_key_record_new(
-                    $0,
+        var result = SignalMutPointerSignedPreKeyRecord()
+        try withNativeHandles(publicKey, privateKey) { publicKeyHandle, privateKeyHandle in
+            try signature.withUnsafeBorrowedBuffer {
+                try checkError(signal_signed_pre_key_record_new(
+                    &result,
                     id,
                     timestamp,
                     publicKeyHandle.const(),
                     privateKeyHandle.const(),
-                    signature
-                )
+                    $0
+                ))
             }
         }
         self.init(owned: NonNull(result)!)
     }
 
-    public func serialize() -> Data {
+    public func serialize() -> [UInt8] {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningData {
+                try invokeFnReturningArray {
                     signal_signed_pre_key_record_serialize($0, nativeHandle.const())
                 }
             }
@@ -100,10 +93,10 @@ public class SignedPreKeyRecord: ClonableHandleOwner<SignalMutPointerSignedPreKe
         }
     }
 
-    public var signature: Data {
+    public var signature: [UInt8] {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningData {
+                try invokeFnReturningArray {
                     signal_signed_pre_key_record_get_signature($0, nativeHandle.const())
                 }
             }

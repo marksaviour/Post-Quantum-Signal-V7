@@ -3,14 +3,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import ByteArray from '../internal/ByteArray.js';
-import * as Native from '../../Native.js';
-import UuidCiphertext from '../groups/UuidCiphertext.js';
+import ByteArray from '../internal/ByteArray';
+import * as Native from '../../../Native';
+import UuidCiphertext from '../groups/UuidCiphertext';
 
 export default class AuthCredentialPresentation extends ByteArray {
   private readonly __type?: never;
 
-  constructor(contents: Uint8Array) {
+  constructor(contents: Buffer) {
     super(contents, Native.AuthCredentialPresentation_CheckValidContents);
   }
 

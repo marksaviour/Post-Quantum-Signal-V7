@@ -394,7 +394,6 @@ mod test {
                 mediaRootBackupKey: vec![0xab; libsignal_account_keys::BACKUP_KEY_LEN],
                 currentAppVersion: "libsignal-testing 0.0.2".into(),
                 firstAppVersion: "libsignal-testing 0.0.1".into(),
-                debugInfo: "https://www.debuglogs.org/libsignal-testing/not-a-real-url".into(),
                 special_fields: Default::default(),
             }
         }
@@ -439,17 +438,10 @@ mod test {
 
         const EXPECTED_JSON: &str = include_str!("expected_serialized_backup.json");
 
-        let actual_json = serde_json::to_string_pretty(&backup).unwrap();
-
-        if std::env::var_os("OVERWRITE_EXPECTED_OUTPUT").is_some() {
-            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("src/backup/expected_serialized_backup.json");
-            eprintln!("writing expected contents to {path:?}");
-            std::fs::write(path, &actual_json).expect("failed to overwrite expected contents");
-            return;
-        }
-
-        pretty_assertions::assert_eq!(actual_json, format!("{EXPECTED_JSON:#}"));
+        pretty_assertions::assert_eq!(
+            serde_json::to_string_pretty(&backup).unwrap(),
+            format!("{EXPECTED_JSON:#}")
+        );
     }
 
     trait Renumbered {

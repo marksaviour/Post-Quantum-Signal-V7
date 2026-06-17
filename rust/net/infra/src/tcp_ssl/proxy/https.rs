@@ -7,12 +7,13 @@ use std::fmt::Display;
 use std::future::Future;
 use std::net::IpAddr;
 use std::num::NonZeroU16;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::TryFutureExt as _;
-use http::Uri;
 use http::uri::Authority;
+use http::Uri;
 use http_body_util::Empty;
 use hyper_util::rt::TokioIo;
 use pin_project::pin_project;
@@ -47,7 +48,8 @@ pub struct HttpProxyStream {
 assert_impl_all!(HttpProxyStream: AsyncDuplexStream);
 
 type StatelessTcpConnector = super::super::StatelessTcp;
-type StatelessTlsConnector = ComposedConnector<super::super::StatelessTls, StatelessTcpConnector>;
+type StatelessTlsConnector =
+    ComposedConnector<super::super::StatelessTls, StatelessTcpConnector, TransportConnectError>;
 
 impl Connector<HttpsProxyRoute<IpAddr>, ()> for super::StatelessProxied {
     type Connection = HttpProxyStream;
@@ -58,7 +60,7 @@ impl Connector<HttpsProxyRoute<IpAddr>, ()> for super::StatelessProxied {
         &self,
         (): (),
         route: HttpsProxyRoute<IpAddr>,
-        log_tag: &str,
+        log_tag: Arc<str>,
     ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
         let HttpsProxyRoute { fragment, inner } = route;
         async move {
@@ -66,8 +68,16 @@ impl Connector<HttpsProxyRoute<IpAddr>, ()> for super::StatelessProxied {
             let tcp_connector = StatelessTcpConnector::default();
             let inner = inner
                 .map_either(
-                    |tls| tls_connector.connect(tls, log_tag).map_ok(Either::Left),
-                    |tcp| tcp_connector.connect(tcp, log_tag).map_ok(Either::Right),
+                    |tls| {
+                        tls_connector
+                            .connect(tls, log_tag.clone())
+                            .map_ok(Either::Left)
+                    },
+                    |tcp| {
+                        tcp_connector
+                            .connect(tcp, log_tag.clone())
+                            .map_ok(Either::Right)
+                    },
                 )
                 .await?;
             let info = inner.transport_info();
@@ -267,8 +277,8 @@ impl Connection for HttpProxyStream {
 mod test {
     use assert_matches::assert_matches;
     use either::Either;
-    use futures_util::FutureExt;
     use futures_util::future::BoxFuture;
+    use futures_util::FutureExt;
     use http::method::Method;
     use http::{HeaderMap, HeaderValue, StatusCode};
     use http_body_util::Empty;
@@ -413,7 +423,7 @@ mod test {
         };
 
         let mut client_stream = super::super::StatelessProxied
-            .connect(route, "test")
+            .connect(route, "test".into())
             .await
             .expect("can connect");
 
@@ -493,7 +503,9 @@ mod test {
             inner: Either::Right(route_to_proxy),
         };
 
-        let connect_result = super::super::StatelessProxied.connect(route, "test").await;
+        let connect_result = super::super::StatelessProxied
+            .connect(route, "test".into())
+            .await;
 
         assert_matches!(connect_result, Err(TransportConnectError::ProxyProtocol));
     }

@@ -3,20 +3,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 use std::fmt::Debug;
-use std::future::Future;
 use std::marker::PhantomData;
-use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
 use futures_util::{Sink, Stream};
-use libsignal_net_infra::TransportInfo;
-use libsignal_net_infra::route::GetCurrentInterface;
-use libsignal_net_infra::utils::no_network_change_events;
+use libsignal_net_infra::{IpType, TransportInfo};
 use pin_project::pin_project;
 use prost::Message;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use crate::chat::{ChatConnection, ConnectionInfo, MessageProto, RequestProto, ResponseProto, ws};
+use crate::chat::{ws2, ChatConnection, ConnectionInfo, MessageProto, RequestProto, ResponseProto};
 use crate::connect_state::RouteInfo;
 use crate::env::ALERT_HEADER_NAME;
 
@@ -43,7 +39,7 @@ impl ChatConnection {
     /// Creates a `ChatConnection` connected to a fake remote end.
     pub fn new_fake<'a>(
         tokio_runtime: tokio::runtime::Handle,
-        listener: ws::EventListener,
+        listener: ws2::EventListener,
         alerts: impl IntoIterator<Item = &'a str>,
     ) -> (Self, FakeChatRemote) {
         let (tx_to_local, rx_from_remote) = tokio::sync::mpsc::unbounded_channel();
@@ -66,14 +62,13 @@ impl ChatConnection {
         let connection_info = ConnectionInfo {
             route_info: RouteInfo::fake(),
             transport_info: TransportInfo {
-                local_addr: (Ipv4Addr::UNSPECIFIED, 0).into(),
-                remote_addr: (Ipv4Addr::UNSPECIFIED, 0).into(),
+                ip_version: IpType::V4,
+                local_port: 0,
             },
         };
         let log_tag = "fake chat".into();
-        let config = crate::chat::ws::Config {
+        let config = crate::chat::ws2::Config {
             local_idle_timeout: Duration::from_secs(86400),
-            post_request_interface_check_timeout: Duration::MAX,
             remote_idle_timeout: Duration::from_secs(86400),
             initial_request_id: 0,
         };
@@ -85,38 +80,17 @@ impl ChatConnection {
             )
         }));
         let chat = Self {
-            inner: crate::chat::ws::Chat::new(
+            inner: crate::chat::ws2::Chat::new(
                 tokio_runtime,
                 local,
                 headers,
                 config,
-                crate::chat::ws::ConnectionConfig {
-                    log_tag,
-                    post_request_interface_check_timeout: config
-                        .post_request_interface_check_timeout,
-                    transport_info: connection_info.transport_info.clone(),
-                    get_current_interface: FakeCurrentInterface,
-                },
-                None,
-                no_network_change_events(),
+                log_tag,
                 listener,
             ),
             connection_info,
-            grpc_overrides: Default::default(),
         };
         (chat, remote)
-    }
-}
-
-struct FakeCurrentInterface;
-impl GetCurrentInterface for FakeCurrentInterface {
-    type Representation = IpAddr;
-
-    fn get_interface_for(
-        &self,
-        _target: IpAddr,
-    ) -> impl Future<Output = Self::Representation> + Send {
-        std::future::ready(Ipv4Addr::UNSPECIFIED.into())
     }
 }
 
@@ -157,17 +131,13 @@ impl FakeChatRemote {
             return Ok(None);
         };
         let proto = match message {
-            tungstenite::Message::Close(None)
-            | tungstenite::Message::Close(Some(tungstenite::protocol::CloseFrame {
-                code: tungstenite::protocol::frame::coding::CloseCode::Normal,
-                reason: _,
-            })) => return Ok(None),
-            tungstenite::Message::Binary(message) => ws::decode_and_validate(&message)?,
+            tungstenite::Message::Close(None) => return Ok(None),
+            tungstenite::Message::Binary(message) => ws2::decode_and_validate(&message)?,
             _ => return Err(ReceiveRequestError::InvalidWebsocketMessageType),
         };
         match proto {
-            ws::ChatMessageProto::Request(request) => Ok(Some(request)),
-            ws::ChatMessageProto::Response(_) => Err(ReceiveRequestError::GotResponse),
+            ws2::ChatMessageProto::Request(request) => Ok(Some(request)),
+            ws2::ChatMessageProto::Response(_) => Err(ReceiveRequestError::GotResponse),
         }
     }
 
@@ -184,8 +154,8 @@ impl FakeChatRemote {
     }
 }
 
-impl From<ws::ChatProtoDataError> for ReceiveRequestError {
-    fn from(value: ws::ChatProtoDataError) -> Self {
+impl From<ws2::ChatProtoDataError> for ReceiveRequestError {
+    fn from(value: ws2::ChatProtoDataError) -> Self {
         Self::InvalidProto(value.to_string())
     }
 }

@@ -39,16 +39,7 @@
       ],
       "default_chat_style": null,
       "custom_chat_colors": {},
-      "optimize_on_device_storage": false,
-      "backup_level": null,
-      "default_sent_media_quality": "Standard",
-      "auto_download_settings": null,
-      "screen_lock_timeout": null,
-      "pin_reminders": null,
-      "app_theme": "System",
-      "calls_use_less_data_setting": "MobileDataOnly",
-      "allow_sealed_sender_from_anyone": false,
-      "allow_automatic_key_verification": false
+      "optimize_on_device_storage": false
     },
     "avatar_url_path": "",
     "donation_subscription": {
@@ -57,16 +48,7 @@
       "manually_canceled": true
     },
     "backup_subscription": null,
-    "svr_pin": "",
-    "android_specific_settings": {
-      "use_system_emoji": true,
-      "screenshot_security": true,
-      "navigation_bar_size": "Normal"
-    },
-    "ios_specific_settings": null,
-    "bio_text": "",
-    "bio_emoji": "",
-    "key_transparency_data": null
+    "svr_pin": ""
   },
   "recipients": [
     {

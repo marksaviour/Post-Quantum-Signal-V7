@@ -15,7 +15,7 @@ use crate::backup::method::LookupPair;
 use crate::backup::recipient::MinimalRecipientData;
 use crate::backup::serialize::SerializeOrder;
 use crate::backup::time::ReportUnusualTimestamp;
-use crate::backup::{TryIntoWith, likely_empty};
+use crate::backup::{likely_empty, TryIntoWith};
 use crate::proto::backup as proto;
 
 /// Validated version of [`proto::StandardMessage`].
@@ -85,11 +85,7 @@ impl<R: Clone, C: LookupPair<RecipientId, MinimalRecipientData, R> + ReportUnusu
                 .collect::<Result<_, _>>()
         })?;
 
-        if let Some(text) = &text {
-            if long_text.is_some() {
-                text.check_length_with_long_text_attachment()?;
-            }
-        } else {
+        if text.is_none() {
             if attachments.is_empty() {
                 return Err(ChatItemError::StandardMessageIsEmpty);
             }
@@ -116,7 +112,6 @@ mod test {
 
     use super::*;
     use crate::backup::chat::Reaction;
-    use crate::backup::chat::text::{MAX_BODY_LENGTH_WITH_LONG_TEXT_ATTACHMENT, TextError};
     use crate::backup::recipient::FullRecipientData;
     use crate::backup::testutil::TestContext;
 
@@ -171,12 +166,6 @@ mod test {
     } => Ok(()); "no text")]
     #[test_case(|x| x.attachments.clear() => Ok(()); "no attachments")]
     #[test_case(|x| x.text = None.into() => Err(ChatItemError::LongTextWithoutBody); "long text without body")]
-    #[test_case(|x| {
-        x.text.as_mut().unwrap().body = "x".repeat(MAX_BODY_LENGTH_WITH_LONG_TEXT_ATTACHMENT);
-    } => Ok(()); "longest body")]
-    #[test_case(|x| {
-        x.text.as_mut().unwrap().body = "x".repeat(MAX_BODY_LENGTH_WITH_LONG_TEXT_ATTACHMENT + 1);
-    } => Err(ChatItemError::Text(TextError::TooLongBodyForLongText(MAX_BODY_LENGTH_WITH_LONG_TEXT_ATTACHMENT + 1))); "long text with long inline body")]
     #[test_case(|x| {
         x.text = None.into();
         x.longText = None.into();

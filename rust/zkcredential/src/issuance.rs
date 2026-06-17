@@ -24,10 +24,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::attributes::{Attribute, PublicAttribute};
 use crate::credentials::{
-    Credential, CredentialKeyPair, CredentialPublicKey, NUM_SUPPORTED_ATTRS, SystemParams,
+    Credential, CredentialKeyPair, CredentialPublicKey, SystemParams, NUM_SUPPORTED_ATTRS,
 };
 use crate::sho::ShoExt;
-use crate::{RANDOMNESS_LEN, VerificationFailure};
+use crate::{VerificationFailure, RANDOMNESS_LEN};
 
 /// Contains a [`Credential`] along with a proof of its validity.
 ///
@@ -252,7 +252,7 @@ impl<'a> IssuanceProofBuilder<'a> {
                 self.authenticated_message,
                 &sho.squeeze_and_ratchet_as_array::<RANDOMNESS_LEN>(),
             )
-            .expect("valid proof");
+            .unwrap();
         IssuanceProof {
             poksho_proof,
             credential,

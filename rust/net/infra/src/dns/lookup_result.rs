@@ -8,8 +8,11 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::slice::Iter;
 use std::vec::IntoIter;
 
+use crate::DnsSource;
+
 #[derive(Debug, Clone)]
 pub struct LookupResult {
+    pub(crate) source: DnsSource,
     pub(crate) ipv4: Vec<Ipv4Addr>,
     pub(crate) ipv6: Vec<Ipv6Addr>,
 }
@@ -51,12 +54,16 @@ impl<'a> IntoIterator for &'a LookupResult {
 }
 
 impl LookupResult {
-    pub fn new(ipv4: Vec<Ipv4Addr>, ipv6: Vec<Ipv6Addr>) -> Self {
-        Self { ipv4, ipv6 }
+    pub fn new(source: DnsSource, ipv4: Vec<Ipv4Addr>, ipv6: Vec<Ipv6Addr>) -> Self {
+        Self { source, ipv4, ipv6 }
     }
 
     pub fn iter(&self) -> <&Self as IntoIterator>::IntoIter {
         self.into_iter()
+    }
+
+    pub(crate) fn source(&self) -> DnsSource {
+        self.source
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -67,7 +74,11 @@ impl LookupResult {
 #[cfg(any(test, feature = "test-util"))]
 impl LookupResult {
     pub fn localhost() -> Self {
-        Self::new(vec![Ipv4Addr::LOCALHOST], vec![Ipv6Addr::LOCALHOST])
+        Self::new(
+            DnsSource::Static,
+            vec![Ipv4Addr::LOCALHOST],
+            vec![Ipv6Addr::LOCALHOST],
+        )
     }
 }
 
@@ -78,6 +89,7 @@ mod test {
     use const_str::ip_addr;
 
     use crate::dns::lookup_result::LookupResult;
+    use crate::DnsSource;
 
     #[test]
     fn lookup_result_iterates_in_the_right_order() {
@@ -131,7 +143,7 @@ mod test {
     }
 
     fn validate_expected_order(ipv4s: Vec<Ipv4Addr>, ipv6s: Vec<Ipv6Addr>, expected: Vec<IpAddr>) {
-        let lookup_result = LookupResult::new(ipv4s, ipv6s);
+        let lookup_result = LookupResult::new(DnsSource::Static, ipv4s, ipv6s);
         let actual: Vec<IpAddr> = lookup_result.into_iter().collect();
         assert_eq!(expected, actual);
     }

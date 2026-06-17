@@ -5,19 +5,19 @@
 
 import * as uuid from 'uuid';
 
-import ByteArray from '../internal/ByteArray.js';
-import * as Native from '../../Native.js';
+import ByteArray from '../internal/ByteArray';
+import * as Native from '../../../Native';
 
-import BackupAuthCredentialRequest from './BackupAuthCredentialRequest.js';
-import BackupAuthCredentialResponse from './BackupAuthCredentialResponse.js';
-import BackupAuthCredential from './BackupAuthCredential.js';
-import GenericServerPublicParams from '../GenericServerPublicParams.js';
-import type { Uuid } from '../../index.js';
+import BackupAuthCredentialRequest from './BackupAuthCredentialRequest';
+import BackupAuthCredentialResponse from './BackupAuthCredentialResponse';
+import BackupAuthCredential from './BackupAuthCredential';
+import GenericServerPublicParams from '../GenericServerPublicParams';
+import type { Uuid } from '../..';
 
 export default class BackupAuthCredentialRequestContext extends ByteArray {
   private readonly __type?: never;
 
-  constructor(contents: Uint8Array) {
+  constructor(contents: Buffer) {
     super(
       contents,
       Native.BackupAuthCredentialRequestContext_CheckValidContents
@@ -25,11 +25,14 @@ export default class BackupAuthCredentialRequestContext extends ByteArray {
   }
 
   static create(
-    backupKey: Uint8Array,
+    backupKey: Buffer,
     aci: Uuid
   ): BackupAuthCredentialRequestContext {
     return new BackupAuthCredentialRequestContext(
-      Native.BackupAuthCredentialRequestContext_New(backupKey, uuid.parse(aci))
+      Native.BackupAuthCredentialRequestContext_New(
+        backupKey,
+        Buffer.from(uuid.parse(aci))
+      )
     );
   }
 

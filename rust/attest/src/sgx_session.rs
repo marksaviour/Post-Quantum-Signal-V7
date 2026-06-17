@@ -159,7 +159,6 @@ mod tests {
         // Start the server with a known private key (K of NK).
         let mut server_hs = snow::Builder::new(client_connection::NOISE_PATTERN.parse()?)
             .local_private_key(&private_key)
-            .unwrap()
             .build_responder()?;
 
         // Spin up the client connection establishment.
@@ -207,7 +206,6 @@ mod tests {
         // Start server with random key that does not match our private key.
         let mut server_hs = snow::Builder::new(client_connection::NOISE_PATTERN.parse()?)
             .local_private_key(&bad_private_key)
-            .unwrap()
             .build_responder()?;
 
         // Spin up the client connection establishment.
@@ -230,7 +228,6 @@ mod tests {
         // Start server with random key that does not match our invalid private key.
         let mut server_hs = snow::Builder::new(client_connection::NOISE_PATTERN.parse()?)
             .local_private_key(&bad_private_key)
-            .unwrap()
             .build_responder()?;
 
         // Spin up the client connection establishment.

@@ -10,7 +10,7 @@
 use prost::Message;
 use rand::{CryptoRng, Rng};
 
-use crate::{KeyPair, PrivateKey, PublicKey, Result, SignalProtocolError, proto};
+use crate::{proto, KeyPair, PrivateKey, PublicKey, Result, SignalProtocolError};
 
 // Used for domain separation between alternate-identity signatures and other key-to-key signatures.
 const ALTERNATE_IDENTITY_SIGNATURE_PREFIX_1: &[u8] = &[0xFF; 32];
@@ -19,7 +19,9 @@ const ALTERNATE_IDENTITY_SIGNATURE_PREFIX_2: &[u8] = b"Signal_PNI_Signature";
 /// A public key that represents the identity of a user.
 ///
 /// Wrapper for [`PublicKey`].
-#[derive(Debug, PartialEq, Eq, Clone, Copy, derive_more::From, derive_more::Into)]
+#[derive(
+    Debug, PartialOrd, Ord, PartialEq, Eq, Clone, Copy, derive_more::From, derive_more::Into,
+)]
 pub struct IdentityKey {
     public_key: PublicKey,
 }
@@ -185,8 +187,8 @@ impl From<IdentityKeyPair> for KeyPair {
 
 #[cfg(test)]
 mod tests {
-    use rand::TryRngCore as _;
     use rand::rngs::OsRng;
+    use rand::TryRngCore as _;
 
     use super::*;
 
@@ -226,38 +228,28 @@ mod tests {
         let secondary = IdentityKeyPair::generate(&mut rng);
 
         let signature = secondary.sign_alternate_identity(primary.identity_key(), &mut rng)?;
-        assert!(
-            secondary
-                .identity_key()
-                .verify_alternate_identity(primary.identity_key(), &signature)?
-        );
+        assert!(secondary
+            .identity_key()
+            .verify_alternate_identity(primary.identity_key(), &signature)?);
         // Not symmetric.
-        assert!(
-            !primary
-                .identity_key()
-                .verify_alternate_identity(secondary.identity_key(), &signature)?
-        );
+        assert!(!primary
+            .identity_key()
+            .verify_alternate_identity(secondary.identity_key(), &signature)?);
 
         let another_signature =
             secondary.sign_alternate_identity(primary.identity_key(), &mut rng)?;
         assert_ne!(signature, another_signature);
-        assert!(
-            secondary
-                .identity_key()
-                .verify_alternate_identity(primary.identity_key(), &another_signature)?
-        );
+        assert!(secondary
+            .identity_key()
+            .verify_alternate_identity(primary.identity_key(), &another_signature)?);
 
         let unrelated = IdentityKeyPair::generate(&mut rng);
-        assert!(
-            !secondary
-                .identity_key()
-                .verify_alternate_identity(unrelated.identity_key(), &signature)?
-        );
-        assert!(
-            !unrelated
-                .identity_key()
-                .verify_alternate_identity(primary.identity_key(), &signature)?
-        );
+        assert!(!secondary
+            .identity_key()
+            .verify_alternate_identity(unrelated.identity_key(), &signature)?);
+        assert!(!unrelated
+            .identity_key()
+            .verify_alternate_identity(primary.identity_key(), &signature)?);
 
         Ok(())
     }

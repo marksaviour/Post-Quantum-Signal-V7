@@ -5,8 +5,8 @@
 
 use std::hash::Hash;
 
-use http::HeaderMap;
 use http::uri::PathAndQuery;
+use http::HeaderMap;
 use tungstenite::protocol::WebSocketConfig;
 
 use crate::route::{ReplaceFragment, RouteProvider, RouteProviderContext, SimpleRoute};
@@ -44,10 +44,10 @@ impl<P> WebSocketProvider<P> {
 impl<P: RouteProvider> RouteProvider for WebSocketProvider<P> {
     type Route = WebSocketRoute<P::Route>;
 
-    fn routes<'s, C: RouteProviderContext>(
+    fn routes<'s>(
         &'s self,
-        context: &mut C,
-    ) -> impl Iterator<Item = Self::Route> + use<'s, C, P> {
+        context: &impl RouteProviderContext,
+    ) -> impl Iterator<Item = Self::Route> + 's {
         self.inner.routes(context).map(|route| WebSocketRoute {
             inner: route,
             fragment: self.fragment.clone(),

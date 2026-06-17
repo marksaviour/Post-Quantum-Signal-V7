@@ -6,7 +6,7 @@
 //! Support logic for Signal's device-to-device transfer feature.
 
 #![deny(unsafe_code)]
-#![warn(missing_docs, clippy::unwrap_used)]
+#![warn(missing_docs)]
 
 use std::fmt;
 use std::time::{Duration, SystemTime};
@@ -16,7 +16,7 @@ use boring::error::ErrorStack;
 use boring::hash::MessageDigest;
 use boring::pkey::{PKey, Private};
 use boring::rsa::Rsa;
-use boring::x509::{X509, X509Builder, X509Name, X509NameBuilder};
+use boring::x509::{X509Builder, X509Name, X509NameBuilder, X509};
 
 /// Error types for device transfer.
 #[derive(Copy, Clone, Debug)]

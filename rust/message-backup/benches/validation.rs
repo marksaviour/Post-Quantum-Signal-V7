@@ -9,19 +9,19 @@
 //! (but not all) of them can be run on an externally-provided backup file as well. See the
 //! `LIBSIGNAL_TESTING`-prefixed environment variables below.
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use futures::AsyncRead;
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use futures::io::{BufReader, Cursor};
-use libsignal_account_keys::{BackupForwardSecrecyToken, BackupKey};
+use futures::AsyncRead;
+use libsignal_account_keys::BackupKey;
 use libsignal_core::Aci;
-use libsignal_message_backup::BackupReader;
 use libsignal_message_backup::backup::{CompletedBackup, PartialBackup, ValidateOnly};
 use libsignal_message_backup::frame::{
-    AES_IV_SIZE, AES_KEY_SIZE, Aes256CbcReader, CursorFactory, FramesReader, MacReader,
-    ReaderFactory,
+    Aes256CbcReader, CursorFactory, FramesReader, MacReader, ReaderFactory, AES_IV_SIZE,
+    AES_KEY_SIZE,
 };
 use libsignal_message_backup::key::MessageBackupKey;
 use libsignal_message_backup::parse::VarintDelimitedReader;
+use libsignal_message_backup::BackupReader;
 use mediasan_common::AsyncSkip;
 use protobuf::Message as _;
 use sha2::Digest as _;
@@ -36,8 +36,6 @@ const CUSTOM_BACKUP_FILE_AES_KEY_ENV_VAR: &str = "LIBSIGNAL_TESTING_BACKUP_FILE_
 const DEFAULT_ACI: Aci = Aci::from_uuid_bytes([0x11; 16]);
 const DEFAULT_ACCOUNT_ENTROPY: &str =
     "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm";
-const DEFAULT_BACKUP_FORWARD_SECRECY_TOKEN: BackupForwardSecrecyToken =
-    BackupForwardSecrecyToken([0xAB; 32]);
 const MESSAGES_PER_CONVERSATION: usize = 200;
 
 /// An [`AsyncRead`] implementation that [yields][] for every callback.
@@ -124,19 +122,10 @@ fn benchmark_multiple_backup_sizes(mut body: impl FnMut(usize, &[u8], &MessageBa
 
     let backup_key =
         BackupKey::derive_from_account_entropy_pool(&DEFAULT_ACCOUNT_ENTROPY.parse().unwrap());
-    let message_backup_key = MessageBackupKey::derive(
-        &backup_key,
-        &backup_key.derive_backup_id(&DEFAULT_ACI),
-        Some(&DEFAULT_BACKUP_FORWARD_SECRECY_TOKEN),
-    );
+    let message_backup_key =
+        MessageBackupKey::derive(&backup_key, &backup_key.derive_backup_id(&DEFAULT_ACI));
 
-    // Use cfg!(debug_assertions) as a proxy for "no optimizations".
-    let sizes: &[usize] = if cfg!(debug_assertions) {
-        &[100]
-    } else {
-        &[30, 100, 300]
-    };
-    for &size in sizes {
+    for size in [30, 100, 300] {
         let backup = generate_backup(size, MESSAGES_PER_CONVERSATION * size, &message_backup_key);
         body(size, &backup, &message_backup_key);
     }
@@ -184,14 +173,14 @@ fn decrypt_only(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("Aes256CbcReader");
     benchmark_multiple_backup_sizes(|size, backup, message_backup_key| {
-        let iv = backup.first_chunk().unwrap();
+        let iv = backup[..AES_IV_SIZE].try_into().unwrap();
 
         group.bench_function(BenchmarkId::new("direct", size), |b| {
             b.iter(|| {
                 process(
                     cursor_without_appended_hash(backup),
                     &message_backup_key.aes_key,
-                    iv,
+                    &iv,
                 )
             })
         });
@@ -200,7 +189,7 @@ fn decrypt_only(c: &mut Criterion) {
                 process(
                     YieldingReader(cursor_without_appended_hash(backup)),
                     &message_backup_key.aes_key,
-                    iv,
+                    &iv,
                 )
             })
         });

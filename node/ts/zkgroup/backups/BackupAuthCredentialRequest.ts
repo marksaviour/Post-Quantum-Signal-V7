@@ -3,21 +3,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import { randomBytes } from 'node:crypto';
+import { randomBytes } from 'crypto';
 
-import * as Native from '../../Native.js';
-import ByteArray from '../internal/ByteArray.js';
-import { RANDOM_LENGTH } from '../internal/Constants.js';
+import * as Native from '../../../Native';
+import ByteArray from '../internal/ByteArray';
+import { RANDOM_LENGTH } from '../internal/Constants';
 
-import GenericServerSecretParams from '../GenericServerSecretParams.js';
-import BackupAuthCredentialResponse from './BackupAuthCredentialResponse.js';
-import BackupLevel from './BackupLevel.js';
-import BackupCredentialType from './BackupCredentialType.js';
+import GenericServerSecretParams from '../GenericServerSecretParams';
+import BackupAuthCredentialResponse from './BackupAuthCredentialResponse';
+import BackupLevel from './BackupLevel';
+import BackupCredentialType from './BackupCredentialType';
 
 export default class BackupAuthCredentialRequest extends ByteArray {
   private readonly __type?: never;
 
-  constructor(contents: Uint8Array) {
+  constructor(contents: Buffer) {
     super(contents, Native.BackupAuthCredentialRequest_CheckValidContents);
   }
 
@@ -42,7 +42,7 @@ export default class BackupAuthCredentialRequest extends ByteArray {
     backupLevel: BackupLevel,
     type: BackupCredentialType,
     params: GenericServerSecretParams,
-    random: Uint8Array
+    random: Buffer
   ): BackupAuthCredentialResponse {
     return new BackupAuthCredentialResponse(
       Native.BackupAuthCredentialRequest_IssueDeterministic(

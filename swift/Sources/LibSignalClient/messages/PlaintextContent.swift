@@ -7,46 +7,40 @@ import Foundation
 import SignalFfi
 
 public class PlaintextContent: NativeHandleOwner<SignalMutPointerPlaintextContent> {
-    override internal class func destroyNativeHandle(
-        _ handle: NonNull<SignalMutPointerPlaintextContent>
-    ) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerPlaintextContent>) -> SignalFfiErrorRef? {
         return signal_plaintext_content_destroy(handle.pointer)
     }
 
     public convenience init<Bytes: ContiguousBytes>(bytes: Bytes) throws {
-        let result = try bytes.withUnsafeBorrowedBuffer { bytes in
-            try invokeFnReturningValueByPointer(.init()) {
-                signal_plaintext_content_deserialize($0, bytes)
-            }
+        var result = SignalMutPointerPlaintextContent()
+        try bytes.withUnsafeBorrowedBuffer {
+            try checkError(signal_plaintext_content_deserialize(&result, $0))
         }
         self.init(owned: NonNull(result)!)
     }
 
     public convenience init(_ decryptionError: DecryptionErrorMessage) {
-        let result = decryptionError.withNativeHandle { decryptionErrorHandle in
-            failOnError {
-                try invokeFnReturningValueByPointer(.init()) {
-                    signal_plaintext_content_from_decryption_error_message($0, decryptionErrorHandle.const())
-                }
-            }
+        var result = SignalMutPointerPlaintextContent()
+        decryptionError.withNativeHandle { decryptionErrorHandle in
+            failOnError(signal_plaintext_content_from_decryption_error_message(&result, decryptionErrorHandle.const()))
         }
         self.init(owned: NonNull(result)!)
     }
 
-    public func serialize() -> Data {
+    public func serialize() -> [UInt8] {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningData {
+                try invokeFnReturningArray {
                     signal_plaintext_content_serialize($0, nativeHandle.const())
                 }
             }
         }
     }
 
-    public var body: Data {
+    public var body: [UInt8] {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningData {
+                try invokeFnReturningArray {
                     signal_plaintext_content_get_body($0, nativeHandle.const())
                 }
             }
@@ -77,45 +71,28 @@ extension SignalConstPointerPlaintextContent: SignalConstPointer {
 }
 
 public class DecryptionErrorMessage: NativeHandleOwner<SignalMutPointerDecryptionErrorMessage> {
-    override internal class func destroyNativeHandle(
-        _ handle: NonNull<SignalMutPointerDecryptionErrorMessage>
-    ) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerDecryptionErrorMessage>) -> SignalFfiErrorRef? {
         return signal_decryption_error_message_destroy(handle.pointer)
     }
 
     public convenience init<Bytes: ContiguousBytes>(bytes: Bytes) throws {
-        let result = try bytes.withUnsafeBorrowedBuffer { bytes in
-            try invokeFnReturningValueByPointer(.init()) {
-                signal_decryption_error_message_deserialize($0, bytes)
-            }
+        var result = SignalMutPointerDecryptionErrorMessage()
+        try bytes.withUnsafeBorrowedBuffer {
+            try checkError(signal_decryption_error_message_deserialize(&result, $0))
         }
         self.init(owned: NonNull(result)!)
     }
 
-    public convenience init<Bytes: ContiguousBytes>(
-        originalMessageBytes bytes: Bytes,
-        type: CiphertextMessage.MessageType,
-        timestamp: UInt64,
-        originalSenderDeviceId: UInt32
-    ) throws {
-        let result = try bytes.withUnsafeBorrowedBuffer { bytes in
-            try invokeFnReturningValueByPointer(.init()) {
-                signal_decryption_error_message_for_original_message(
-                    $0,
-                    bytes,
-                    type.rawValue,
-                    timestamp,
-                    originalSenderDeviceId
-                )
-            }
+    public convenience init<Bytes: ContiguousBytes>(originalMessageBytes bytes: Bytes, type: CiphertextMessage.MessageType, timestamp: UInt64, originalSenderDeviceId: UInt32) throws {
+        var result = SignalMutPointerDecryptionErrorMessage()
+        try bytes.withUnsafeBorrowedBuffer {
+            try checkError(signal_decryption_error_message_for_original_message(&result, $0, type.rawValue, timestamp, originalSenderDeviceId))
         }
         self.init(owned: NonNull(result)!)
     }
 
     // For testing
-    public static func extractFromSerializedContent<Bytes: ContiguousBytes>(
-        _ bytes: Bytes
-    ) throws -> DecryptionErrorMessage {
+    public static func extractFromSerializedContent<Bytes: ContiguousBytes>(_ bytes: Bytes) throws -> DecryptionErrorMessage {
         return try bytes.withUnsafeBorrowedBuffer { buffer in
             try invokeFnReturningNativeHandle {
                 signal_decryption_error_message_extract_from_serialized_content($0, buffer)
@@ -123,10 +100,10 @@ public class DecryptionErrorMessage: NativeHandleOwner<SignalMutPointerDecryptio
         }
     }
 
-    public func serialize() -> Data {
+    public func serialize() -> [UInt8] {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningData {
+                try invokeFnReturningArray {
                     signal_decryption_error_message_serialize($0, nativeHandle.const())
                 }
             }

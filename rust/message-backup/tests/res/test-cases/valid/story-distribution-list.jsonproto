@@ -12,18 +12,10 @@
         "hasSetMyStoriesPrivacy": true,
         "hasViewedOnboardingStory": true,
         "linkPreviews": true,
+        "phoneNumberSharingMode": "NOBODY",
         "readReceipts": true,
         "storyViewReceiptsEnabled": true,
-        "typingIndicators": true,
-        "phoneNumberSharingMode": "NOBODY",
-        "defaultSentMediaQuality": "STANDARD",
-        "appTheme": "SYSTEM",
-        "callsUseLessDataSetting": "MOBILE_DATA_ONLY"
-      },
-      "androidSpecificSettings": {
-        "useSystemEmoji": true,
-        "screenshotSecurity": true,
-        "navigationBarSize": "NORMAL"
+        "typingIndicators": true
       },
       "givenName": "User A",
       "profileKey": "o1dR4GmMYarDp9Nof/lWorlnXUIz2Q85X/5deikxPio="

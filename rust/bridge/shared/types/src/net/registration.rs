@@ -8,12 +8,12 @@ use std::future::Future;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use futures_util::TryFutureExt as _;
-use libsignal_net_chat::api::registration::{
-    CreateSession, CreateSessionError, ForServiceIds, NewMessageNotification,
-    ProvidedAccountAttributes, PushToken, RegisterAccountResponse, RegistrationSession,
-    ResumeSessionError, SessionId, SignedPreKeyBody, SkipDeviceTransfer, UnidentifiedAccessKey,
+use libsignal_net::registration::{
+    self as net_registration, ConnectChat, CreateSession, CreateSessionError, ForServiceIds,
+    NewMessageNotification, ProvidedAccountAttributes, PushTokenType, RegisterAccountResponse,
+    RegistrationSession, RequestError, RequestedInformation, ResumeSessionError, SessionId,
+    SignedPreKeyBody, SkipDeviceTransfer, UnidentifiedAccessKey,
 };
-use libsignal_net_chat::registration::{self as net_registration, ConnectUnauthChat, RequestError};
 use libsignal_protocol::PublicKey;
 
 use crate::*;
@@ -59,8 +59,9 @@ pub struct AccountAttributes {
 // Aliases so that places that refer to syntactic argument names (e.g.
 // jni::jni_arg and friends) aren't ambiguous.
 pub type RegistrationCreateSessionRequest = CreateSession;
-pub type RegistrationPushToken = PushToken;
+pub type RegistrationPushTokenType = PushTokenType;
 pub type RegistrationAccountAttributes = AccountAttributes;
+pub type RegistrationSessionRequestedInformation = RequestedInformation;
 
 // Alias the type exposed across the bridge since the macros don't support
 // templates well.
@@ -72,25 +73,25 @@ bridge_as_handle!(RegisterAccountRequest);
 bridge_as_handle!(RegisterAccountResponse);
 bridge_as_handle!(RegistrationAccountAttributes);
 
-/// Precursor to a [`Box<dyn ConnectUnauthChat>`](ConnectUnauthChat).
+/// Precursor to a [`Box<dyn ConnectChat>`](ConnectChat).
 ///
-/// Functionally a `FnOnce(Handle) -> Box<dyn ConnectUnauthChat>` but named for clarity.
+/// Functionally a `FnOnce(Handle) -> Box<dyn ConnectChat>` but named for clarity.
 pub trait ConnectChatBridge: Send + UnwindSafe {
-    /// Converts `self` into a `ConnectUnauthChat` impl.
+    /// Converts `self` into a `ConnectChat` impl.
     ///
     /// The provided runtime handle can be used to spawn tasks needed by the
     /// implementation.
     fn create_chat_connector(
         self: Box<Self>,
         runtime: tokio::runtime::Handle,
-    ) -> Box<dyn ConnectUnauthChat + Send + Sync + UnwindSafe>;
+    ) -> Box<dyn ConnectChat + Send + Sync + UnwindSafe>;
 }
 
 impl RegistrationService {
     pub fn create_session(
         connect_bridge: Box<dyn ConnectChatBridge>,
         tokio_runtime: tokio::runtime::Handle,
-        create_session: CreateSession,
+        create_session: net_registration::CreateSession,
     ) -> impl Future<Output = Result<Self, RequestError<CreateSessionError>>> + Send {
         net_registration::RegistrationService::create_session(
             create_session,

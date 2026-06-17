@@ -5,12 +5,9 @@
 
 import { assert } from 'chai';
 import * as uuid from 'uuid';
-import { Buffer } from 'node:buffer';
-
-import * as AccountKeys from '../AccountKeys.js';
-import * as util from './util.js';
-import { Aci } from '../Address.js';
-import { assertArrayNotEquals } from './util.js';
+import * as AccountKeys from '../AccountKeys';
+import * as util from './util';
+import { Aci } from '../Address';
 
 util.initLogger();
 
@@ -60,7 +57,10 @@ describe('BackupKey', () => {
     assert.equal(32, backupKey.serialize().length);
 
     const randomKey = AccountKeys.BackupKey.generateRandom();
-    assertArrayNotEquals(backupKey.serialize(), randomKey.serialize());
+    assert.notEqual(
+      backupKey.serialize().toString('hex'),
+      randomKey.serialize().toString('hex')
+    );
   });
 
   it('can generate derived keys', () => {
@@ -71,17 +71,23 @@ describe('BackupKey', () => {
 
     const backupId = backupKey.deriveBackupId(aci);
     assert.equal(16, backupId.length);
-    assertArrayNotEquals(backupId, randomKey.deriveBackupId(aci));
-    assertArrayNotEquals(backupId, backupKey.deriveBackupId(otherAci));
+    assert.notEqual(
+      backupId.toString('hex'),
+      randomKey.deriveBackupId(aci).toString('hex')
+    );
+    assert.notEqual(
+      backupId.toString('hex'),
+      backupKey.deriveBackupId(otherAci).toString('hex')
+    );
 
     const ecKey = backupKey.deriveEcKey(aci);
-    assertArrayNotEquals(
-      ecKey.serialize(),
-      randomKey.deriveEcKey(aci).serialize()
+    assert.notEqual(
+      ecKey.serialize().toString('hex'),
+      randomKey.deriveEcKey(aci).serialize().toString('hex')
     );
-    assertArrayNotEquals(
-      ecKey.serialize(),
-      backupKey.deriveEcKey(otherAci).serialize()
+    assert.notEqual(
+      ecKey.serialize().toString('hex'),
+      backupKey.deriveEcKey(otherAci).serialize().toString('hex')
     );
 
     const localMetadataKey = backupKey.deriveLocalBackupMetadataKey();
@@ -98,6 +104,6 @@ describe('BackupKey', () => {
     // This media ID wasn't for a thumbnail, but the API doesn't (can't) check that.
     const thumbnailKey = backupKey.deriveThumbnailTransitEncryptionKey(mediaId);
     assert.equal(32 + 32, mediaKey.length);
-    assertArrayNotEquals(mediaKey, thumbnailKey);
+    assert.notEqual(mediaKey.toString('hex'), thumbnailKey.toString('hex'));
   });
 });

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::serialization::ReservedByte;
 use crate::crypto;
 
-#[derive(Clone, Serialize, Deserialize, PartialDefault)]
+#[derive(Serialize, Deserialize, PartialDefault)]
 pub struct ReceiptCredentialRequest {
     pub(crate) reserved: ReservedByte,
     pub(crate) public_key: crypto::receipt_credential_request::PublicKey,

@@ -7,24 +7,19 @@ import Foundation
 import SignalFfi
 
 public class KyberPreKeyRecord: ClonableHandleOwner<SignalMutPointerKyberPreKeyRecord> {
-    override internal class func destroyNativeHandle(
-        _ handle: NonNull<SignalMutPointerKyberPreKeyRecord>
-    ) -> SignalFfiErrorRef? {
+    override internal class func destroyNativeHandle(_ handle: NonNull<SignalMutPointerKyberPreKeyRecord>) -> SignalFfiErrorRef? {
         return signal_kyber_pre_key_record_destroy(handle.pointer)
     }
 
-    override internal class func cloneNativeHandle(
-        _ newHandle: inout SignalMutPointerKyberPreKeyRecord,
-        currentHandle: SignalConstPointerKyberPreKeyRecord
-    ) -> SignalFfiErrorRef? {
+    override internal class func cloneNativeHandle(_ newHandle: inout SignalMutPointerKyberPreKeyRecord, currentHandle: SignalConstPointerKyberPreKeyRecord) -> SignalFfiErrorRef? {
         return signal_kyber_pre_key_record_clone(&newHandle, currentHandle)
     }
 
     public convenience init<Bytes: ContiguousBytes>(bytes: Bytes) throws {
-        let handle = try bytes.withUnsafeBorrowedBuffer { bytes in
-            try invokeFnReturningValueByPointer(.init()) {
-                signal_kyber_pre_key_record_deserialize($0, bytes)
-            }
+        let handle = try bytes.withUnsafeBorrowedBuffer {
+            var result = SignalMutPointerKyberPreKeyRecord()
+            try checkError(signal_kyber_pre_key_record_deserialize(&result, $0))
+            return result
         }
         self.init(owned: NonNull(handle)!)
     }
@@ -35,20 +30,19 @@ public class KyberPreKeyRecord: ClonableHandleOwner<SignalMutPointerKyberPreKeyR
         keyPair: KEMKeyPair,
         signature: Bytes
     ) throws {
-        let result = try keyPair.withNativeHandle { keyPairHandle in
-            try signature.withUnsafeBorrowedBuffer { signature in
-                try invokeFnReturningValueByPointer(.init()) {
-                    signal_kyber_pre_key_record_new($0, id, timestamp, keyPairHandle.const(), signature)
-                }
+        var result = SignalMutPointerKyberPreKeyRecord()
+        try keyPair.withNativeHandle { keyPairHandle in
+            try signature.withUnsafeBorrowedBuffer {
+                try checkError(signal_kyber_pre_key_record_new(&result, id, timestamp, keyPairHandle.const(), $0))
             }
         }
         self.init(owned: NonNull(result)!)
     }
 
-    public func serialize() -> Data {
+    public func serialize() -> [UInt8] {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningData {
+                try invokeFnReturningArray {
                     signal_kyber_pre_key_record_serialize($0, nativeHandle.const())
                 }
             }
@@ -99,10 +93,10 @@ public class KyberPreKeyRecord: ClonableHandleOwner<SignalMutPointerKyberPreKeyR
         }
     }
 
-    public var signature: Data {
+    public var signature: [UInt8] {
         return withNativeHandle { nativeHandle in
             failOnError {
-                try invokeFnReturningData {
+                try invokeFnReturningArray {
                     signal_kyber_pre_key_record_get_signature($0, nativeHandle.const())
                 }
             }

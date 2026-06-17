@@ -9,7 +9,7 @@ use crate::backup::frame::RecipientId;
 use crate::backup::method::LookupPair;
 use crate::backup::recipient::{DestinationKind, MinimalRecipientData};
 use crate::backup::time::{ReportUnusualTimestamp, Timestamp, TimestampError};
-use crate::backup::{TryIntoWith, likely_empty};
+use crate::backup::{likely_empty, TryIntoWith};
 use crate::proto::backup as proto;
 
 /// Validated version of [`proto::Quote`]
@@ -32,7 +32,6 @@ pub enum QuoteType {
     Normal,
     GiftBadge,
     ViewOnce,
-    Poll,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -88,20 +87,10 @@ impl<R: Clone, C: LookupPair<RecipientId, MinimalRecipientData, R> + ReportUnusu
             return Err(QuoteError::AuthorNotFound(author_id));
         };
         let author = match author_data {
-            MinimalRecipientData::Contact {
-                e164: None,
-                aci: None,
-                pni: _,
-                username: _,
-            } => {
+            MinimalRecipientData::Contact { e164: None, aci: None, pni: _ } => {
                 Err(QuoteError::AuthorHasNoAciOrE164(author_id))
             }
-            MinimalRecipientData::Contact {
-                e164: _,
-                aci: _,
-                pni: _,
-                username: _,
-            } => {
+            MinimalRecipientData::Contact { e164: _, aci: _, pni: _ } => {
                 Ok(author.clone())
             }
             MinimalRecipientData::Self_
@@ -130,13 +119,9 @@ impl<R: Clone, C: LookupPair<RecipientId, MinimalRecipientData, R> + ReportUnusu
             }
             proto::quote::Type::GIFT_BADGE => QuoteType::GiftBadge,
             proto::quote::Type::VIEW_ONCE => QuoteType::ViewOnce,
-            proto::quote::Type::POLL => QuoteType::Poll,
         };
 
         let text = text.into_option().map(|text| text.try_into()).transpose()?;
-        text.as_ref()
-            .map(|text: &MessageText| text.check_length_for_quote())
-            .transpose()?;
 
         let attachments = likely_empty(attachments, |iter| {
             iter.map(|attachment| attachment.try_into_with(context))
@@ -275,14 +260,6 @@ mod test {
     }
 
     #[test_case(|_| {} => Ok(()); "valid")]
-    #[test_case(|x| x.text = Some(proto::Text {
-        body: "a".repeat(2 * 1024),
-        ..proto::Text::test_data()
-    }).into() => Ok(()); "valid longest legal quote text")]
-    #[test_case(|x| x.text = Some(proto::Text {
-        body: "a".repeat(2 * 1024 + 1),
-        ..proto::Text::test_data()
-    }).into() => Err(QuoteError::Text(TextError::TooLongBodyForQuote(2 * 1024 + 1))); "too long text")]
     #[test_case(|x| x.authorId = 0 => Err(QuoteError::AuthorNotFound(RecipientId(0))); "unknown author")]
     #[test_case(|x| {
         x.authorId = TestContext::GROUP_ID.0

@@ -6,10 +6,10 @@
 //! Generates a new GenericServerSecretParams and encodes it using base64 and
 //! [`bincode::serialize`].
 
-use base64::prelude::{BASE64_STANDARD, Engine};
+use base64::prelude::{Engine, BASE64_STANDARD};
 use rand::Rng;
-use zkgroup::RANDOMNESS_LEN;
 use zkgroup::generic_server_params::GenericServerSecretParams;
+use zkgroup::RANDOMNESS_LEN;
 
 fn main() {
     let mut rng = rand::rng();

@@ -6,19 +6,19 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use futures_util::{Stream, StreamExt, stream};
+use futures_util::{stream, Stream, StreamExt};
 use tokio::net::UdpSocket;
 
 use crate::dns::custom_resolver::{DnsQueryResult, DnsTransport};
 use crate::dns::dns_errors::Error;
 use crate::dns::dns_lookup::DnsLookupRequest;
 use crate::dns::dns_message;
-use crate::dns::dns_message::{MAX_DNS_UDP_MESSAGE_LEN, parse_a_record, parse_aaaa_record};
+use crate::dns::dns_message::{parse_a_record, parse_aaaa_record, MAX_DNS_UDP_MESSAGE_LEN};
 use crate::dns::dns_types::ResourceType;
 use crate::route::{
     Connector, ConnectorExt as _, ConnectorFactory, StatelessUdpConnector, UdpRoute,
 };
-use crate::{DnsSource, dns};
+use crate::{dns, DnsSource};
 
 const A_REQUEST_ID: u16 = 0;
 const AAAA_REQUEST_ID: u16 = 1;
@@ -45,16 +45,13 @@ impl Connector<UdpRoute<IpAddr>, ()> for UdpTransportConnector {
         &self,
         _over: (),
         route: UdpRoute<IpAddr>,
-        log_tag: &str,
+        log_tag: Arc<str>,
     ) -> Result<Self::Connection, Self::Error> {
         let socket = StatelessUdpConnector
-            .connect(route, log_tag)
+            .connect(route, log_tag.clone())
             .await
             .map_err(|e| {
-                log::warn!(
-                    "[{log_tag}] Failed to create UDP socket for DNS lookup: {}",
-                    e.kind()
-                );
+                log::error!("[{log_tag}] Failed to create UDP socket: {}", e.kind());
                 Error::TransportFailure
             })?;
         Ok(UdpTransport {

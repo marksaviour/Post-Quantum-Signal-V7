@@ -10,6 +10,8 @@ import static org.signal.libsignal.internal.FilterExceptions.filterExceptions;
 import org.signal.libsignal.internal.CalledFromNative;
 import org.signal.libsignal.internal.Native;
 import org.signal.libsignal.internal.NativeHandleGuard;
+import org.signal.libsignal.protocol.ecc.Curve;
+import org.signal.libsignal.protocol.ecc.ECKeyPair;
 import org.signal.libsignal.protocol.ecc.ECPrivateKey;
 import org.signal.libsignal.protocol.ecc.ECPublicKey;
 
@@ -27,19 +29,19 @@ public class IdentityKeyPair {
     this.privateKey = privateKey;
   }
 
-  public IdentityKeyPair(byte[] serialized) throws InvalidKeyException {
-    try {
-      var pair = Native.IdentityKeyPair_Deserialize(serialized);
-      this.publicKey = new IdentityKey(pair.getFirst());
-      this.privateKey = new ECPrivateKey(pair.getSecond());
-    } catch (Exception e) {
-      throw new InvalidKeyException(e);
-    }
+  public IdentityKeyPair(byte[] serialized) {
+    long[] tuple = Native.IdentityKeyPair_Deserialize(serialized);
+    long publicKeyHandle = tuple[0];
+    long privateKeyHandle = tuple[1];
+
+    this.publicKey = new IdentityKey(publicKeyHandle);
+    this.privateKey = new ECPrivateKey(privateKeyHandle);
   }
 
   public static IdentityKeyPair generate() {
-    ECPrivateKey privateKey = ECPrivateKey.generate();
-    ECPublicKey publicKey = privateKey.publicKey();
+    ECKeyPair keyPair = Curve.generateKeyPair();
+    ECPrivateKey privateKey = keyPair.getPrivateKey();
+    ECPublicKey publicKey = keyPair.getPublicKey();
     return new IdentityKeyPair(new IdentityKey(publicKey), privateKey);
   }
 

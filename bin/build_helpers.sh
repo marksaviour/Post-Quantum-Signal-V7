@@ -6,8 +6,6 @@
 # shellcheck shell=bash
 
 check_rust() {
-  build_std="$1"
-
   if ! command -v rustup > /dev/null && [[ -d ~/.cargo/bin ]]; then
     # Try to find rustup in its default per-user install location.
     # This will be important when running from inside Xcode,
@@ -28,7 +26,7 @@ check_rust() {
   fi
 
   if [[ -n "${CARGO_BUILD_TARGET:-}" ]] && ! (rustup target list --installed | grep -q "${CARGO_BUILD_TARGET:-}"); then
-    if [[ -n "${build_std:-}" ]]; then
+    if [[ -n "${BUILD_STD:-}" ]]; then
       echo "warning: Building using -Zbuild-std to support tier 3 target ${CARGO_BUILD_TARGET}." >&2
     else
       echo "error: Rust target ${CARGO_BUILD_TARGET} not installed" >&2

@@ -8,11 +8,11 @@ use std::borrow::Cow;
 use heck::ToSnakeCase;
 use proc_macro::TokenStream;
 use proc_macro2::{Delimiter, Group, TokenStream as TokenStream2};
-use quote::{ToTokens, quote};
+use quote::{quote, ToTokens};
 use syn::spanned::Spanned;
 use syn::{
-    self, Attribute, DeriveInput, Field, Ident, LitStr, MetaList, TypePath, parse_macro_input,
-    parse2,
+    self, parse2, parse_macro_input, Attribute, DeriveInput, Field, Ident, LitStr, MetaList,
+    TypePath,
 };
 
 macro_rules! tokens_alias {

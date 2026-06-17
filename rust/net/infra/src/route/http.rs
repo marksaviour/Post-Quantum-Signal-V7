@@ -14,7 +14,7 @@ use crate::route::{
     ReplaceFragment, RouteProvider, RouteProviderContext, SetAlpn, SimpleRoute, TcpRoute, TlsRoute,
     TlsRouteFragment, UnresolvedHost,
 };
-use crate::{Alpn, OverrideNagleAlgorithm};
+use crate::Alpn;
 
 pub const DEFAULT_HTTPS_PORT: NonZeroU16 = nonzero!(443u16);
 
@@ -22,16 +22,6 @@ pub const DEFAULT_HTTPS_PORT: NonZeroU16 = nonzero!(443u16);
 pub struct HttpRouteFragment {
     pub host_header: Arc<str>,
     pub path_prefix: Arc<str>,
-    /// If present, the connector may *assume* we'll be using this HTTP version.
-    ///
-    /// This isn't fully compliant with the H2 standard, RFC 7540; if we're using TLS, we should
-    /// always check the ALPN result before going ahead with an H2 connection. However, at the time
-    /// of this writing (Nov 2025) we don't connect to arbitrary servers with H2, only those we
-    /// already know should support it. If we some day have a need to negotiate ALPN properly, we'll
-    /// need to change [`TlsRouteFragment`] to accept multiple permitted ALPN values, and then once
-    /// everything is threaded through we should be able to remove this field (treating "no ALPN" as
-    /// "assume HTTP/1.1 only").
-    pub http_version: Option<HttpVersion>,
     /// Only for logging; the name of the domain front for this proxy.
     pub front_name: Option<&'static str>,
 }
@@ -50,7 +40,6 @@ pub struct HttpsProvider<F, P> {
 pub struct DomainFrontRouteProvider {
     pub(crate) fronts: Vec<DomainFrontConfig>,
     pub(crate) http_version: HttpVersion,
-    pub(crate) override_nagle_algorithm: OverrideNagleAlgorithm,
 }
 
 /// A supported HTTP version for [`HttpsTlsRoute`].
@@ -58,7 +47,7 @@ pub struct DomainFrontRouteProvider {
 /// This is distinct from [`http::Version`] since only a subset of versions are
 /// supported, and is distinct from [`Alpn`] which is TLS-specific and could in
 /// theory represent non-HTTP-version values.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug)]
 pub enum HttpVersion {
     Http1_1,
     Http2,
@@ -97,15 +86,10 @@ impl<F, P> HttpsProvider<F, P> {
 }
 
 impl DomainFrontRouteProvider {
-    pub fn new(
-        http_version: HttpVersion,
-        fronts: Vec<DomainFrontConfig>,
-        override_nagle_algorithm: OverrideNagleAlgorithm,
-    ) -> Self {
+    pub fn new(http_version: HttpVersion, fronts: Vec<DomainFrontConfig>) -> Self {
         Self {
             fronts,
             http_version,
-            override_nagle_algorithm,
         }
     }
 }
@@ -113,14 +97,13 @@ impl DomainFrontRouteProvider {
 impl RouteProvider for DomainFrontRouteProvider {
     type Route = HttpsTlsRoute<TlsRoute<TcpRoute<UnresolvedHost>>>;
 
-    fn routes<'s, C: RouteProviderContext>(
+    fn routes<'s>(
         &'s self,
-        context: &mut C,
-    ) -> impl Iterator<Item = Self::Route> + use<'s, C> {
+        context: &impl RouteProviderContext,
+    ) -> impl Iterator<Item = Self::Route> + 's {
         let Self {
             fronts,
             http_version,
-            override_nagle_algorithm,
         } = self;
 
         let sni_index = context.random_usize();
@@ -147,7 +130,6 @@ impl RouteProvider for DomainFrontRouteProvider {
                         inner: TcpRoute {
                             address: UnresolvedHost(Arc::clone(sni)),
                             port: DEFAULT_HTTPS_PORT,
-                            override_nagle_algorithm: *override_nagle_algorithm,
                         },
                         fragment: TlsRouteFragment {
                             root_certs: root_certs.clone(),
@@ -159,7 +141,6 @@ impl RouteProvider for DomainFrontRouteProvider {
                     fragment: HttpRouteFragment {
                         host_header: Arc::clone(http_host),
                         path_prefix: Arc::clone(path_prefix),
-                        http_version: Some(*http_version),
                         front_name: Some(*front_name),
                     },
                 })
@@ -174,10 +155,10 @@ where
     F: RouteProvider<Route = HttpsTlsRoute<P::Route>>,
 {
     type Route = HttpsTlsRoute<P::Route>;
-    fn routes<'s, C: RouteProviderContext>(
+    fn routes<'s>(
         &'s self,
-        context: &mut C,
-    ) -> impl Iterator<Item = Self::Route> + use<'s, C, F, P> {
+        context: &impl RouteProviderContext,
+    ) -> impl Iterator<Item = Self::Route> + 's {
         let Self {
             direct_host_header,
             direct_http_version,
@@ -194,7 +175,6 @@ where
                     fragment: HttpRouteFragment {
                         host_header: Arc::clone(direct_host_header),
                         path_prefix: "".into(),
-                        http_version: Some(*direct_http_version),
                         front_name: None,
                     },
                     inner,
@@ -230,9 +210,22 @@ mod test {
     use itertools::Itertools;
 
     use super::*;
-    use crate::OverrideNagleAlgorithm;
     use crate::route::testutils::FakeContext;
     use crate::route::{DirectTcpRouteProvider, TlsRouteProvider};
+
+    #[derive(Copy, Clone, Debug, Default)]
+    struct FakeProvider;
+
+    impl RouteProvider for FakeProvider {
+        type Route = ();
+
+        fn routes<'s>(
+            &'s self,
+            _context: &impl RouteProviderContext,
+        ) -> impl Iterator<Item = Self::Route> + 's {
+            std::iter::once(())
+        }
+    }
 
     #[test]
     fn http_provider_route_order() {
@@ -260,7 +253,6 @@ mod test {
                     },
                 ],
                 http_version: HttpVersion::Http1_1,
-                override_nagle_algorithm: OverrideNagleAlgorithm::UseSystemDefault,
             },
             inner: TlsRouteProvider {
                 sni: Host::Domain("direct-host".into()),
@@ -269,12 +261,11 @@ mod test {
                 inner: DirectTcpRouteProvider {
                     dns_hostname: "direct-tcp-host".into(),
                     port: DIRECT_TCP_PORT,
-                    override_nagle_algorithm: OverrideNagleAlgorithm::UseSystemDefault,
                 },
             },
         };
 
-        let routes = provider.routes(&mut FakeContext::new()).collect_vec();
+        let routes = provider.routes(&FakeContext::new()).collect_vec();
 
         assert_eq!(
             routes,
@@ -283,7 +274,6 @@ mod test {
                     fragment: HttpRouteFragment {
                         host_header: "direct-host".into(),
                         path_prefix: "".into(),
-                        http_version: Some(HttpVersion::Http2),
                         front_name: None,
                     },
                     inner: TlsRoute {
@@ -296,7 +286,6 @@ mod test {
                         inner: TcpRoute {
                             address: UnresolvedHost("direct-tcp-host".into()),
                             port: DIRECT_TCP_PORT,
-                            override_nagle_algorithm: OverrideNagleAlgorithm::UseSystemDefault,
                         },
                     },
                 },
@@ -304,7 +293,6 @@ mod test {
                     fragment: HttpRouteFragment {
                         host_header: "front-host-1".into(),
                         path_prefix: "/prefix-1".into(),
-                        http_version: Some(HttpVersion::Http1_1),
                         front_name: Some("front-1")
                     },
                     inner: TlsRoute {
@@ -316,8 +304,7 @@ mod test {
                         },
                         inner: TcpRoute {
                             address: UnresolvedHost("front-sni-1a".into()),
-                            port: DEFAULT_HTTPS_PORT,
-                            override_nagle_algorithm: OverrideNagleAlgorithm::UseSystemDefault,
+                            port: DEFAULT_HTTPS_PORT
                         },
                     }
                 },
@@ -325,7 +312,6 @@ mod test {
                     fragment: HttpRouteFragment {
                         host_header: "front-host-1".into(),
                         path_prefix: "/prefix-1".into(),
-                        http_version: Some(HttpVersion::Http1_1),
                         front_name: Some("front-1")
                     },
                     inner: TlsRoute {
@@ -337,8 +323,7 @@ mod test {
                         },
                         inner: TcpRoute {
                             address: UnresolvedHost("front-sni-1b".into()),
-                            port: DEFAULT_HTTPS_PORT,
-                            override_nagle_algorithm: OverrideNagleAlgorithm::UseSystemDefault,
+                            port: DEFAULT_HTTPS_PORT
                         },
                     }
                 },
@@ -346,20 +331,18 @@ mod test {
                     fragment: HttpRouteFragment {
                         host_header: "front-host-2".into(),
                         path_prefix: "/prefix-2".into(),
-                        http_version: Some(HttpVersion::Http1_1),
                         front_name: Some("front-2")
                     },
                     inner: TlsRoute {
                         fragment: TlsRouteFragment {
                             root_certs: RootCertificates::Native,
-                            sni: Host::Domain("front-sni-2a".into()),
+                            sni: Host::Domain("front-sni-2b".into()),
                             alpn: Some(Alpn::Http1_1),
                             min_protocol_version: None,
                         },
                         inner: TcpRoute {
-                            address: UnresolvedHost("front-sni-2a".into()),
-                            port: DEFAULT_HTTPS_PORT,
-                            override_nagle_algorithm: OverrideNagleAlgorithm::UseSystemDefault,
+                            address: UnresolvedHost("front-sni-2b".into()),
+                            port: DEFAULT_HTTPS_PORT
                         },
                     }
                 }

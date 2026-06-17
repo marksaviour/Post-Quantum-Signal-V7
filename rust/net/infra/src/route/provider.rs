@@ -3,10 +3,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-use std::marker::PhantomData;
-
-use derive_where::derive_where;
-
 use crate::route::{RouteProvider, RouteProviderContext};
 
 /// Additional methods available for [`RouteProvider`]s.
@@ -45,10 +41,10 @@ pub struct Map<R, F>(R, F);
 impl<R: RouteProvider, F: Fn(R::Route) -> T, T> RouteProvider for Map<R, F> {
     type Route = T;
 
-    fn routes<'s, C: RouteProviderContext>(
+    fn routes<'s>(
         &'s self,
-        context: &mut C,
-    ) -> impl Iterator<Item = Self::Route> + use<'s, C, R, F, T> {
+        context: &impl RouteProviderContext,
+    ) -> impl Iterator<Item = Self::Route> + 's {
         self.0.routes(context).map(&self.1)
     }
 }
@@ -59,26 +55,10 @@ pub struct Filter<R, F>(R, F);
 impl<R: RouteProvider, F: Fn(&R::Route) -> bool> RouteProvider for Filter<R, F> {
     type Route = R::Route;
 
-    fn routes<'s, C: RouteProviderContext>(
+    fn routes<'s>(
         &'s self,
-        context: &mut C,
-    ) -> impl Iterator<Item = Self::Route> + use<'s, C, R, F> {
+        context: &impl RouteProviderContext,
+    ) -> impl Iterator<Item = Self::Route> + 's {
         self.0.routes(context).filter(&self.1)
-    }
-}
-
-#[derive_where(Default)]
-pub struct EmptyProvider<R> {
-    route_type: PhantomData<R>,
-}
-
-impl<R> RouteProvider for EmptyProvider<R> {
-    type Route = R;
-
-    fn routes<'s, C: RouteProviderContext>(
-        &'s self,
-        _context: &mut C,
-    ) -> impl Iterator<Item = Self::Route> + use<'s, C, R> {
-        std::iter::empty()
     }
 }

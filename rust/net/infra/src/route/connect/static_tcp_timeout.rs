@@ -5,6 +5,7 @@
 
 use std::fmt::Debug;
 use std::future::Future;
+use std::sync::Arc;
 
 use derive_where::derive_where;
 use tokio::time::Duration;
@@ -66,7 +67,7 @@ where
         &self,
         transport: Transport,
         route: Route,
-        log_tag: &str,
+        log_tag: Arc<str>,
     ) -> impl Future<Output = Result<Self::Connection, Self::Error>> + Send {
         let Self {
             inner_connector,
@@ -109,7 +110,7 @@ mod tests {
             &self,
             _transport: T,
             _route: R,
-            _log_tag: &str,
+            _log_tag: Arc<str>,
         ) -> Result<Self::Connection, Self::Error> {
             Err(TransportConnectError::TcpConnectionFailed)
         }
@@ -125,7 +126,7 @@ mod tests {
 
         let start = tokio::time::Instant::now();
         let result: Result<DummyConnection, _> = connector
-            .connect_over(TEST_TRANSPORT, TEST_ROUTE, LOG_TAG)
+            .connect_over(TEST_TRANSPORT, TEST_ROUTE, Arc::from(LOG_TAG))
             .await;
 
         assert_matches!(result, Ok(_), "Expected successful connection");
@@ -142,7 +143,7 @@ mod tests {
 
         let start = tokio::time::Instant::now();
         let result: Result<DummyConnection, _> = connector
-            .connect_over(TEST_TRANSPORT, TEST_ROUTE, LOG_TAG)
+            .connect_over(TEST_TRANSPORT, TEST_ROUTE, Arc::from(LOG_TAG))
             .await;
 
         assert_matches!(
@@ -168,7 +169,7 @@ mod tests {
 
         let start = tokio::time::Instant::now();
         let result: Result<DummyConnection, _> = connector
-            .connect_over(TEST_TRANSPORT, TEST_ROUTE, LOG_TAG)
+            .connect_over(TEST_TRANSPORT, TEST_ROUTE, Arc::from(LOG_TAG))
             .await;
 
         assert_matches!(

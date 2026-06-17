@@ -3,13 +3,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-import { use } from 'chai';
-import chaiAsPromised from 'chai-as-promised';
-import { Buffer } from 'node:buffer';
+import { assert, use } from 'chai';
+import * as chaiAsPromised from 'chai-as-promised';
 
-import * as Native from '../Native.js';
-import { Uint8ArrayInputStream } from './ioutil.js';
-import { assertArrayEquals } from './util.js';
+import * as Native from '../../Native';
+import { Uint8ArrayInputStream } from './ioutil';
 
 use(chaiAsPromised);
 
@@ -21,6 +19,6 @@ describe('InputStream', () => {
     const output = await Native.TESTING_InputStreamReadIntoZeroLengthSlice(
       input
     );
-    assertArrayEquals(output, CAPS_ALPHABET_INPUT);
+    assert.deepEqual(output.compare(CAPS_ALPHABET_INPUT), 0);
   });
 });
