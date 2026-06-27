@@ -66,10 +66,8 @@ pub async fn create_pre_key_bundle<R: Rng + CryptoRng>(
     store: &mut dyn ProtocolStore,
     mut csprng: &mut R,
 ) -> Result<PreKeyBundle, SignalProtocolError> {
-    let pre_key_pair = KeyPair::generate(&mut csprng);
+    // Bob's signed X25519 ratchet key (formerly the EC signed prekey), authenticated by ML-DSA.
     let signed_pre_key_pair = KeyPair::generate(&mut csprng);
-    let kyber_pre_key_pair = kem::KeyPair::generate(kem::KeyType::Kyber1024, &mut csprng);
-
     let signed_pre_key_public = signed_pre_key_pair.public_key.serialize();
     let signed_pre_key_signature = store
         .get_identity_key_pair()
@@ -77,6 +75,8 @@ pub async fn create_pre_key_bundle<R: Rng + CryptoRng>(
         .private_key()
         .calculate_signature(&signed_pre_key_public, &mut csprng)?;
 
+    // Bob's signed (last-resort) ML-KEM-1024 prekey.
+    let kyber_pre_key_pair = kem::KeyPair::generate(kem::KeyType::MLKEM1024, &mut csprng);
     let kyber_pre_key_public = kyber_pre_key_pair.public_key.serialize();
     let kyber_pre_key_signature = store
         .get_identity_key_pair()
@@ -84,32 +84,37 @@ pub async fn create_pre_key_bundle<R: Rng + CryptoRng>(
         .private_key()
         .calculate_signature(&kyber_pre_key_public, &mut csprng)?;
 
+    // Bob's one-time ML-KEM-1024 prekey.
+    let one_time_kyber_pre_key_pair = kem::KeyPair::generate(kem::KeyType::MLKEM1024, &mut csprng);
+    let one_time_kyber_pre_key_public = one_time_kyber_pre_key_pair.public_key.serialize();
+    let one_time_kyber_pre_key_signature = store
+        .get_identity_key_pair()
+        .await?
+        .private_key()
+        .calculate_signature(&one_time_kyber_pre_key_public, &mut csprng)?;
+
     let device_id: u32 = csprng.random();
-    let pre_key_id: u32 = csprng.random();
     let signed_pre_key_id: u32 = csprng.random();
     let kyber_pre_key_id: u32 = csprng.random();
+    // Ensure the two KEM prekeys have distinct identifiers.
+    let one_time_kyber_pre_key_id: u32 = kyber_pre_key_id.wrapping_add(1);
 
     let pre_key_bundle = PreKeyBundle::new(
         store.get_local_registration_id().await?,
         device_id.into(),
-        Some((pre_key_id.into(), pre_key_pair.public_key)),
         signed_pre_key_id.into(),
         signed_pre_key_pair.public_key,
         signed_pre_key_signature.to_vec(),
-        *store.get_identity_key_pair().await?.identity_key(),
-    )?;
-    let pre_key_bundle = pre_key_bundle.with_kyber_pre_key(
         kyber_pre_key_id.into(),
         kyber_pre_key_pair.public_key.clone(),
         kyber_pre_key_signature.to_vec(),
+        *store.get_identity_key_pair().await?.identity_key(),
+    )?
+    .with_one_time_kyber_pre_key(
+        one_time_kyber_pre_key_id.into(),
+        one_time_kyber_pre_key_pair.public_key.clone(),
+        one_time_kyber_pre_key_signature.to_vec(),
     );
-
-    store
-        .save_pre_key(
-            pre_key_id.into(),
-            &PreKeyRecord::new(pre_key_id.into(), &pre_key_pair),
-        )
-        .await?;
 
     let timestamp = Timestamp::from_epoch_millis(csprng.random());
 
@@ -136,84 +141,84 @@ pub async fn create_pre_key_bundle<R: Rng + CryptoRng>(
             ),
         )
         .await?;
+
+    store
+        .save_kyber_pre_key(
+            one_time_kyber_pre_key_id.into(),
+            &KyberPreKeyRecord::new(
+                one_time_kyber_pre_key_id.into(),
+                Timestamp::from_epoch_millis(43),
+                &one_time_kyber_pre_key_pair,
+                &one_time_kyber_pre_key_signature,
+            ),
+        )
+        .await?;
     Ok(pre_key_bundle)
 }
 
+/// Initialize a fully post-quantum session pair *without* a one-time KEM prekey (only the signed
+/// last-resort ML-KEM-1024 prekey contributes a shared secret).
 pub fn initialize_sessions_v3() -> Result<(SessionRecord, SessionRecord), SignalProtocolError> {
-    let mut csprng = OsRng.unwrap_err();
-    let alice_identity = IdentityKeyPair::generate(&mut csprng);
-    let bob_identity = IdentityKeyPair::generate(&mut csprng);
-
-    let alice_base_key = KeyPair::generate(&mut csprng);
-
-    let bob_base_key = KeyPair::generate(&mut csprng);
-    let bob_ephemeral_key = bob_base_key;
-
-    let alice_params = AliceSignalProtocolParameters::new(
-        alice_identity,
-        alice_base_key,
-        *bob_identity.identity_key(),
-        bob_base_key.public_key,
-        bob_ephemeral_key.public_key,
-    );
-
-    let alice_session = initialize_alice_session_record(&alice_params, &mut csprng)?;
-
-    let bob_params = BobSignalProtocolParameters::new(
-        bob_identity,
-        bob_base_key,
-        None,
-        bob_ephemeral_key,
-        None,
-        *alice_identity.identity_key(),
-        alice_base_key.public_key,
-        None,
-    );
-
-    let bob_session = initialize_bob_session_record(&bob_params)?;
-
-    Ok((alice_session, bob_session))
+    initialize_pq_sessions(false)
 }
 
+/// Initialize a fully post-quantum session pair *with* a one-time KEM prekey (both the signed and
+/// the one-time ML-KEM-1024 prekeys contribute shared secrets).
 pub fn initialize_sessions_v4() -> Result<(SessionRecord, SessionRecord), SignalProtocolError> {
+    initialize_pq_sessions(true)
+}
+
+fn initialize_pq_sessions(
+    with_one_time_kem: bool,
+) -> Result<(SessionRecord, SessionRecord), SignalProtocolError> {
     let mut csprng = OsRng.unwrap_err();
     let alice_identity = IdentityKeyPair::generate(&mut csprng);
     let bob_identity = IdentityKeyPair::generate(&mut csprng);
 
     let alice_base_key = KeyPair::generate(&mut csprng);
 
-    let bob_base_key = KeyPair::generate(&mut csprng);
-    let bob_ephemeral_key = bob_base_key;
+    // Bob's signed X25519 ratchet key (Double Ratchet only) and his signed ML-KEM-1024 prekey.
+    let bob_ratchet_key = KeyPair::generate(&mut csprng);
+    let bob_kyber_key = kem::KeyPair::generate(kem::KeyType::MLKEM1024, &mut csprng);
+    let bob_one_time_kyber_key =
+        kem::KeyPair::generate(kem::KeyType::MLKEM1024, &mut csprng);
 
-    let bob_kyber_key = kem::KeyPair::generate(kem::KeyType::Kyber1024, &mut csprng);
-
-    let alice_params = AliceSignalProtocolParameters::new(
+    let mut alice_params = AliceSignalProtocolParameters::new(
         alice_identity,
         alice_base_key,
         *bob_identity.identity_key(),
-        bob_base_key.public_key,
-        bob_ephemeral_key.public_key,
-    )
-    .with_their_kyber_pre_key(&bob_kyber_key.public_key);
+        bob_ratchet_key.public_key,
+        bob_kyber_key.public_key.clone(),
+    );
+    if with_one_time_kem {
+        alice_params.set_their_one_time_kem_pre_key(&bob_one_time_kyber_key.public_key);
+    }
 
     let alice_session = initialize_alice_session_record(&alice_params, &mut csprng)?;
-    let kyber_ciphertext = {
-        let bytes = alice_session
-            .get_kyber_ciphertext()?
-            .expect("has kyber ciphertext")
-            .clone();
-        bytes.into_boxed_slice()
-    };
+
+    let kem_ciphertext = alice_session
+        .get_kyber_ciphertext()?
+        .expect("has KEM ciphertext")
+        .clone()
+        .into_boxed_slice();
+    let one_time_ciphertext = alice_session
+        .get_pq_one_time_ciphertext()?
+        .map(|ct| ct.clone().into_boxed_slice());
+    let signature = alice_session
+        .get_identity_signature()?
+        .expect("has transcript signature")
+        .clone();
 
     let bob_params = BobSignalProtocolParameters::new(
         bob_identity,
-        bob_base_key,
-        None,
-        bob_ephemeral_key,
-        Some(bob_kyber_key),
+        bob_ratchet_key,
+        bob_kyber_key,
+        with_one_time_kem.then_some(bob_one_time_kyber_key),
         *alice_identity.identity_key(),
         alice_base_key.public_key,
-        Some(&kyber_ciphertext),
+        &kem_ciphertext,
+        one_time_ciphertext.as_ref(),
+        &signature,
     );
 
     let bob_session = initialize_bob_session_record(&bob_params)?;
@@ -221,6 +226,7 @@ pub fn initialize_sessions_v4() -> Result<(SessionRecord, SessionRecord), Signal
     Ok((alice_session, bob_session))
 }
 
+#[cfg(feature = "sealed_sender")]
 pub fn extract_single_ssv2_received_message(input: &[u8]) -> (ServiceId, Vec<u8>) {
     let message = SealedSenderV2SentMessage::parse(input).expect("valid");
     assert_eq!(1, message.recipients.len());
@@ -358,14 +364,6 @@ impl TestStoreBuilder {
             .now_or_never()
             .expect("sync")
             .expect("contains local registration id");
-        let maybe_pre_key_record = self.store.all_pre_key_ids().max().map(|id| {
-            self.store
-                .pre_key_store
-                .get_pre_key(*id)
-                .now_or_never()
-                .expect("syng")
-                .expect("has pre key")
-        });
         let identity_key_pair = self
             .store
             .get_identity_key_pair()
@@ -385,33 +383,42 @@ impl TestStoreBuilder {
                     .expect("has signed pre key")
             })
             .expect("contains at least one signed pre key");
-        let maybe_kyber_pre_key_record = self.store.all_kyber_pre_key_ids().max().map(|id| {
-            self.store
-                .get_kyber_pre_key(*id)
-                .now_or_never()
-                .expect("sync")
-                .expect("has kyber pre key")
-        });
+        // The fully PQ handshake requires at least one ML-KEM prekey. We use the highest-id
+        // kyber prekey as the signed (last-resort) KEM prekey, and, if a second one exists, the
+        // next-highest as a one-time KEM prekey.
+        let mut kyber_ids: Vec<_> = self.store.all_kyber_pre_key_ids().copied().collect();
+        kyber_ids.sort_unstable();
+        let signed_kyber_id = *kyber_ids.last().expect("contains at least one kyber pre key");
+        let signed_kyber_record = self
+            .store
+            .get_kyber_pre_key(signed_kyber_id)
+            .now_or_never()
+            .expect("sync")
+            .expect("has kyber pre key");
         let mut bundle = PreKeyBundle::new(
             registration_id,
             device_id,
-            maybe_pre_key_record.map(|rec| {
-                (
-                    rec.id().expect("has id"),
-                    rec.public_key().expect("has public key"),
-                )
-            }),
             signed_pre_key_record.id().expect("has id"),
             signed_pre_key_record.public_key().expect("has public key"),
             signed_pre_key_record.signature().expect("has signature"),
+            signed_kyber_record.id().expect("has id"),
+            signed_kyber_record.public_key().expect("has public key"),
+            signed_kyber_record.signature().expect("has signature"),
             *identity_key,
         )
         .expect("can make pre key bundle from store");
-        if let Some(rec) = maybe_kyber_pre_key_record {
-            bundle = bundle.with_kyber_pre_key(
-                rec.id().expect("has id"),
-                rec.public_key().expect("has public key"),
-                rec.signature().expect("has signature"),
+        if kyber_ids.len() >= 2 {
+            let one_time_id = kyber_ids[kyber_ids.len() - 2];
+            let one_time_record = self
+                .store
+                .get_kyber_pre_key(one_time_id)
+                .now_or_never()
+                .expect("sync")
+                .expect("has kyber pre key");
+            bundle = bundle.with_one_time_kyber_pre_key(
+                one_time_record.id().expect("has id"),
+                one_time_record.public_key().expect("has public key"),
+                one_time_record.signature().expect("has signature"),
             );
         }
         bundle

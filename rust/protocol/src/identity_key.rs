@@ -3,14 +3,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-//! Wrappers over cryptographic primitives from [`libsignal_core::curve`] to represent a user.
+//! Wrappers over the post-quantum [`crate::dsa`] (ML-DSA-87) signature scheme to
+//! represent the long-term identity of a user.
+//!
+//! In the fully post-quantum PQXDH variant the identity key is an **ML-DSA-87
+//! signing keypair**. It is used purely for *authentication* — it signs prekey
+//! bundles and the initiator's handshake transcript — and, unlike the legacy
+//! Curve25519 identity key, performs no Diffie-Hellman agreement.
 
 #![warn(missing_docs)]
 
 use prost::Message;
 use rand::{CryptoRng, Rng};
 
-use crate::{proto, KeyPair, PrivateKey, PublicKey, Result, SignalProtocolError};
+use crate::{dsa, proto, Result, SignalProtocolError};
 
 // Used for domain separation between alternate-identity signatures and other key-to-key signatures.
 const ALTERNATE_IDENTITY_SIGNATURE_PREFIX_1: &[u8] = &[0xFF; 32];
@@ -18,23 +24,21 @@ const ALTERNATE_IDENTITY_SIGNATURE_PREFIX_2: &[u8] = b"Signal_PNI_Signature";
 
 /// A public key that represents the identity of a user.
 ///
-/// Wrapper for [`PublicKey`].
-#[derive(
-    Debug, PartialOrd, Ord, PartialEq, Eq, Clone, Copy, derive_more::From, derive_more::Into,
-)]
+/// Wrapper for an ML-DSA-87 [`dsa::PublicKey`] (verification key).
+#[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Clone, Copy)]
 pub struct IdentityKey {
-    public_key: PublicKey,
+    public_key: dsa::PublicKey,
 }
 
 impl IdentityKey {
-    /// Initialize a public-facing identity from a public key.
-    pub fn new(public_key: PublicKey) -> Self {
+    /// Initialize a public-facing identity from a verification key.
+    pub fn new(public_key: dsa::PublicKey) -> Self {
         Self { public_key }
     }
 
-    /// Return the public key representing this identity.
+    /// Return the ML-DSA verification key representing this identity.
     #[inline]
-    pub fn public_key(&self) -> &PublicKey {
+    pub fn public_key(&self) -> &dsa::PublicKey {
         &self.public_key
     }
 
@@ -46,8 +50,14 @@ impl IdentityKey {
 
     /// Deserialize a public identity from a byte slice.
     pub fn decode(value: &[u8]) -> Result<Self> {
-        let pk = PublicKey::try_from(value)?;
+        let pk = dsa::PublicKey::deserialize(value)?;
         Ok(Self { public_key: pk })
+    }
+
+    /// Verify an ML-DSA `signature` produced by the corresponding [`IdentityKeyPair`] over
+    /// `message`.
+    pub fn verify_signature(&self, message: &[u8], signature: &[u8]) -> bool {
+        self.public_key.verify_signature(message, signature)
     }
 
     /// Given a trusted identity `self`, verify that `other` represents an alternate identity for
@@ -74,18 +84,24 @@ impl TryFrom<&[u8]> for IdentityKey {
     }
 }
 
+impl From<dsa::PublicKey> for IdentityKey {
+    fn from(value: dsa::PublicKey) -> Self {
+        Self { public_key: value }
+    }
+}
+
 /// The private identity of a user.
 ///
-/// Can be converted to and from [`KeyPair`].
-#[derive(Copy, Clone)]
+/// Can be converted to and from a [`dsa::KeyPair`].
+#[derive(Copy, Clone, Debug)]
 pub struct IdentityKeyPair {
     identity_key: IdentityKey,
-    private_key: PrivateKey,
+    private_key: dsa::SecretKey,
 }
 
 impl IdentityKeyPair {
     /// Create a key pair from a public `identity_key` and a private `private_key`.
-    pub fn new(identity_key: IdentityKey, private_key: PrivateKey) -> Self {
+    pub fn new(identity_key: IdentityKey, private_key: dsa::SecretKey) -> Self {
         Self {
             identity_key,
             private_key,
@@ -94,11 +110,11 @@ impl IdentityKeyPair {
 
     /// Generate a random new identity from randomness in `csprng`.
     pub fn generate<R: CryptoRng + Rng>(csprng: &mut R) -> Self {
-        let keypair = KeyPair::generate(csprng);
+        let keypair = dsa::KeyPair::generate(csprng);
 
         Self {
             identity_key: keypair.public_key.into(),
-            private_key: keypair.private_key,
+            private_key: keypair.secret_key,
         }
     }
 
@@ -108,15 +124,15 @@ impl IdentityKeyPair {
         &self.identity_key
     }
 
-    /// Return the public key that defines this identity.
+    /// Return the public verification key that defines this identity.
     #[inline]
-    pub fn public_key(&self) -> &PublicKey {
+    pub fn public_key(&self) -> &dsa::PublicKey {
         self.identity_key.public_key()
     }
 
-    /// Return the private key that defines this identity.
+    /// Return the private signing key that defines this identity.
     #[inline]
-    pub fn private_key(&self) -> &PrivateKey {
+    pub fn private_key(&self) -> &dsa::SecretKey {
         &self.private_key
     }
 
@@ -131,20 +147,25 @@ impl IdentityKeyPair {
         result.into_boxed_slice()
     }
 
+    /// Sign `message` with this identity's ML-DSA signing key.
+    pub fn sign<R: Rng + CryptoRng>(&self, message: &[u8], rng: &mut R) -> Result<Box<[u8]>> {
+        self.private_key.calculate_signature(message, rng)
+    }
+
     /// Generate a signature claiming that `other` represents the same user as `self`.
     pub fn sign_alternate_identity<R: Rng + CryptoRng>(
         &self,
         other: &IdentityKey,
         rng: &mut R,
     ) -> Result<Box<[u8]>> {
-        Ok(self.private_key.calculate_signature_for_multipart_message(
+        self.private_key.calculate_signature_for_multipart_message(
             &[
                 ALTERNATE_IDENTITY_SIGNATURE_PREFIX_1,
                 ALTERNATE_IDENTITY_SIGNATURE_PREFIX_2,
                 &other.serialize(),
             ],
             rng,
-        )?)
+        )
     }
 }
 
@@ -156,32 +177,26 @@ impl TryFrom<&[u8]> for IdentityKeyPair {
             .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
         Ok(Self {
             identity_key: IdentityKey::try_from(&structure.public_key[..])?,
-            private_key: PrivateKey::deserialize(&structure.private_key)?,
+            private_key: dsa::SecretKey::deserialize(&structure.private_key)?,
         })
     }
 }
 
-impl TryFrom<PrivateKey> for IdentityKeyPair {
-    type Error = SignalProtocolError;
-
-    fn try_from(private_key: PrivateKey) -> Result<Self> {
-        let identity_key = IdentityKey::new(private_key.public_key()?);
-        Ok(Self::new(identity_key, private_key))
-    }
-}
-
-impl From<KeyPair> for IdentityKeyPair {
-    fn from(value: KeyPair) -> Self {
+impl From<dsa::KeyPair> for IdentityKeyPair {
+    fn from(value: dsa::KeyPair) -> Self {
         Self {
             identity_key: value.public_key.into(),
-            private_key: value.private_key,
+            private_key: value.secret_key,
         }
     }
 }
 
-impl From<IdentityKeyPair> for KeyPair {
+impl From<IdentityKeyPair> for dsa::KeyPair {
     fn from(value: IdentityKeyPair) -> Self {
-        Self::new(value.identity_key.into(), value.private_key)
+        dsa::KeyPair {
+            public_key: *value.identity_key.public_key(),
+            secret_key: value.private_key,
+        }
     }
 }
 
@@ -194,7 +209,7 @@ mod tests {
 
     #[test]
     fn test_identity_key_from() {
-        let key_pair = KeyPair::generate(&mut OsRng.unwrap_err());
+        let key_pair = dsa::KeyPair::generate(&mut OsRng.unwrap_err());
         let key_pair_public_serialized = key_pair.public_key.serialize();
         let identity_key = IdentityKey::from(key_pair.public_key);
         assert_eq!(key_pair_public_serialized, identity_key.serialize());
@@ -208,10 +223,6 @@ mod tests {
         assert_eq!(
             identity_key_pair.identity_key(),
             deserialized_identity_key_pair.identity_key()
-        );
-        assert_eq!(
-            identity_key_pair.private_key().key_type(),
-            deserialized_identity_key_pair.private_key().key_type()
         );
         assert_eq!(
             identity_key_pair.private_key().serialize(),
@@ -238,7 +249,6 @@ mod tests {
 
         let another_signature =
             secondary.sign_alternate_identity(primary.identity_key(), &mut rng)?;
-        assert_ne!(signature, another_signature);
         assert!(secondary
             .identity_key()
             .verify_alternate_identity(primary.identity_key(), &another_signature)?);

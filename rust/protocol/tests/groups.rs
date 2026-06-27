@@ -5,6 +5,7 @@
 
 mod support;
 
+#[cfg(feature = "sealed_sender")]
 use std::time::SystemTime;
 
 use futures_util::FutureExt;
@@ -141,6 +142,7 @@ fn group_basic_encrypt_decrypt() -> Result<(), SignalProtocolError> {
     .expect("sync")
 }
 
+#[cfg(feature = "sealed_sender")]
 #[test]
 fn group_sealed_sender() -> Result<(), SignalProtocolError> {
     async {
@@ -344,6 +346,7 @@ fn group_sealed_sender() -> Result<(), SignalProtocolError> {
     .expect("sync")
 }
 
+#[cfg(feature = "sealed_sender")]
 #[test]
 fn group_sealed_sender_multiple_devices() -> Result<(), SignalProtocolError> {
     async {
@@ -576,6 +579,7 @@ fn group_sealed_sender_multiple_devices() -> Result<(), SignalProtocolError> {
     .expect("sync")
 }
 
+#[cfg(feature = "sealed_sender")]
 #[test]
 fn group_sealed_sender_multiple_devices_and_excluded_recipients() -> Result<(), SignalProtocolError>
 {

@@ -18,11 +18,19 @@ message PreKeySignalMessage {
   optional uint32 registration_id   = 5;
   optional uint32 pre_key_id        = 1;
   optional uint32 signed_pre_key_id = 6;
+  // Signed (last-resort) ML-KEM-1024 prekey: ciphertext ct1 encapsulated to it.
   optional uint32 kyber_pre_key_id  = 7;
   optional bytes  kyber_ciphertext  = 8;
   optional bytes  base_key          = 2;
   optional bytes  identity_key      = 3;
   optional bytes  message           = 4; // SignalMessage
+  // Fully post-quantum PQXDH additions:
+  // Optional one-time ML-KEM-1024 prekey: ciphertext ct2 encapsulated to it.
+  optional uint32 pq_one_time_pre_key_id = 9;
+  optional bytes  pq_one_time_ciphertext = 10;
+  // The initiator's ML-DSA-87 signature over the handshake transcript
+  // (her_IK || ct1 || ct2 || their_IK || their_ratchet_key || base_key).
+  optional bytes  identity_signature     = 11;
 }
 
 message SenderKeyMessage {

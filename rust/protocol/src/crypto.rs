@@ -3,6 +3,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+// The AES-CTR + HMAC-SHA256 routines and their error types in this module are only consumed by
+// Sealed Sender, which is gated out of the fully post-quantum build (the ML-DSA identity cannot do
+// the Diffie-Hellman that Sealed Sender relies on). Keep them available without dead-code warnings
+// when that feature is disabled.
+#![allow(dead_code)]
+
 use std::result::Result;
 
 use aes::cipher::{KeyIvInit, StreamCipher};

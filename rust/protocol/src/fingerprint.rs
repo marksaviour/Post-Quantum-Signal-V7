@@ -213,23 +213,16 @@ impl Fingerprint {
 
 #[cfg(test)]
 mod test {
-    use const_str::hex;
+    use rand::rngs::OsRng;
     use rand::TryRngCore as _;
 
     use super::*;
+    use crate::IdentityKeyPair;
 
-    const ALICE_IDENTITY: &[u8] =
-        &hex!("0506863bc66d02b40d27b8d49ca7c09e9239236f9d7d25d6fcca5ce13c7064d868");
-    const BOB_IDENTITY: &[u8] =
-        &hex!("05f781b6fb32fed9ba1cf2de978d4d5da28dc34046ae814402b5c0dbd96fda907b");
-
-    const DISPLAYABLE_FINGERPRINT_V1: &str =
-        "300354477692869396892869876765458257569162576843440918079131";
-    const ALICE_SCANNABLE_FINGERPRINT_V1 : &str = "080112220a201e301a0353dce3dbe7684cb8336e85136cdc0ee96219494ada305d62a7bd61df1a220a20d62cbf73a11592015b6b9f1682ac306fea3aaf3885b84d12bca631e9d4fb3a4d";
-    const BOB_SCANNABLE_FINGERPRINT_V1   : &str = "080112220a20d62cbf73a11592015b6b9f1682ac306fea3aaf3885b84d12bca631e9d4fb3a4d1a220a201e301a0353dce3dbe7684cb8336e85136cdc0ee96219494ada305d62a7bd61df";
-
-    const ALICE_SCANNABLE_FINGERPRINT_V2 : &str = "080212220a201e301a0353dce3dbe7684cb8336e85136cdc0ee96219494ada305d62a7bd61df1a220a20d62cbf73a11592015b6b9f1682ac306fea3aaf3885b84d12bca631e9d4fb3a4d";
-    const BOB_SCANNABLE_FINGERPRINT_V2   : & str = "080212220a20d62cbf73a11592015b6b9f1682ac306fea3aaf3885b84d12bca631e9d4fb3a4d1a220a201e301a0353dce3dbe7684cb8336e85136cdc0ee96219494ada305d62a7bd61df";
+    // The classic Curve25519 fingerprint known-answer vectors no longer apply now that the
+    // identity key is an ML-DSA-87 verification key, so these tests verify the fingerprint
+    // *algorithm's* behavioural properties (determinism, symmetry, version sensitivity) over
+    // freshly generated post-quantum identities instead.
 
     const ALICE_STABLE_ID: &str = "+14152222222";
     const BOB_STABLE_ID: &str = "+14153333333";
@@ -251,10 +244,9 @@ mod test {
 
     #[test]
     fn fingerprint_test_v1() -> Result<()> {
-        // testVectorsVersion1 in Java
-
-        let a_key = IdentityKey::decode(ALICE_IDENTITY)?;
-        let b_key = IdentityKey::decode(BOB_IDENTITY)?;
+        let mut rng = OsRng.unwrap_err();
+        let a_key = *IdentityKeyPair::generate(&mut rng).identity_key();
+        let b_key = *IdentityKeyPair::generate(&mut rng).identity_key();
 
         let version = 1;
         let iterations = 5200;
@@ -277,42 +269,38 @@ mod test {
             &a_key,
         )?;
 
+        // Both sides compute the same displayable fingerprint.
         assert_eq!(
-            hex::encode(a_fprint.scannable.serialize()?),
-            ALICE_SCANNABLE_FINGERPRINT_V1
+            format!("{}", a_fprint.display),
+            format!("{}", b_fprint.display)
         );
-        assert_eq!(
-            hex::encode(b_fprint.scannable.serialize()?),
-            BOB_SCANNABLE_FINGERPRINT_V1
-        );
+        assert_eq!(format!("{}", a_fprint.display).len(), 60);
 
-        assert_eq!(format!("{}", a_fprint.display), DISPLAYABLE_FINGERPRINT_V1);
-        assert_eq!(format!("{}", b_fprint.display), DISPLAYABLE_FINGERPRINT_V1);
-
-        assert_eq!(
-            hex::encode(a_fprint.scannable.serialize()?),
-            ALICE_SCANNABLE_FINGERPRINT_V1
-        );
-        assert_eq!(
-            hex::encode(b_fprint.scannable.serialize()?),
-            BOB_SCANNABLE_FINGERPRINT_V1
-        );
+        // Scannable fingerprints cross-verify.
+        assert!(a_fprint.scannable.compare(&b_fprint.scannable.serialize()?)?);
+        assert!(b_fprint.scannable.compare(&a_fprint.scannable.serialize()?)?);
 
         Ok(())
     }
 
     #[test]
     fn fingerprint_test_v2() -> Result<()> {
-        // testVectorsVersion2 in Java
+        let mut rng = OsRng.unwrap_err();
+        let a_key = *IdentityKeyPair::generate(&mut rng).identity_key();
+        let b_key = *IdentityKeyPair::generate(&mut rng).identity_key();
 
-        let a_key = IdentityKey::decode(ALICE_IDENTITY)?;
-        let b_key = IdentityKey::decode(BOB_IDENTITY)?;
-
-        let version = 2;
         let iterations = 5200;
 
-        let a_fprint = Fingerprint::new(
-            version,
+        let a_fprint_v1 = Fingerprint::new(
+            1,
+            iterations,
+            ALICE_STABLE_ID.as_bytes(),
+            &a_key,
+            BOB_STABLE_ID.as_bytes(),
+            &b_key,
+        )?;
+        let a_fprint_v2 = Fingerprint::new(
+            2,
             iterations,
             ALICE_STABLE_ID.as_bytes(),
             &a_key,
@@ -320,35 +308,15 @@ mod test {
             &b_key,
         )?;
 
-        let b_fprint = Fingerprint::new(
-            version,
-            iterations,
-            BOB_STABLE_ID.as_bytes(),
-            &b_key,
-            ALICE_STABLE_ID.as_bytes(),
-            &a_key,
-        )?;
-
+        // The displayable fingerprint is independent of the scannable version...
         assert_eq!(
-            hex::encode(a_fprint.scannable.serialize()?),
-            ALICE_SCANNABLE_FINGERPRINT_V2
+            format!("{}", a_fprint_v1.display),
+            format!("{}", a_fprint_v2.display)
         );
-        assert_eq!(
-            hex::encode(b_fprint.scannable.serialize()?),
-            BOB_SCANNABLE_FINGERPRINT_V2
-        );
-
-        // unchanged vs v1
-        assert_eq!(format!("{}", a_fprint.display), DISPLAYABLE_FINGERPRINT_V1);
-        assert_eq!(format!("{}", b_fprint.display), DISPLAYABLE_FINGERPRINT_V1);
-
-        assert_eq!(
-            hex::encode(a_fprint.scannable.serialize()?),
-            ALICE_SCANNABLE_FINGERPRINT_V2
-        );
-        assert_eq!(
-            hex::encode(b_fprint.scannable.serialize()?),
-            BOB_SCANNABLE_FINGERPRINT_V2
+        // ...but the scannable encoding carries the version and therefore differs.
+        assert_ne!(
+            hex::encode(a_fprint_v1.scannable.serialize()?),
+            hex::encode(a_fprint_v2.scannable.serialize()?)
         );
 
         Ok(())
@@ -357,10 +325,6 @@ mod test {
     #[test]
     fn fingerprint_matching_identifiers() -> Result<()> {
         // testMatchingFingerprints
-
-        use rand::rngs::OsRng;
-
-        use crate::IdentityKeyPair;
 
         let a_key_pair = IdentityKeyPair::generate(&mut OsRng.unwrap_err());
         let b_key_pair = IdentityKeyPair::generate(&mut OsRng.unwrap_err());
@@ -415,10 +379,6 @@ mod test {
 
     #[test]
     fn fingerprint_mismatching_fingerprints() -> Result<()> {
-        use rand::rngs::OsRng;
-
-        use crate::IdentityKeyPair;
-
         let mut rng = OsRng.unwrap_err();
         let a_key_pair = IdentityKeyPair::generate(&mut rng);
         let b_key_pair = IdentityKeyPair::generate(&mut rng);
@@ -466,10 +426,6 @@ mod test {
 
     #[test]
     fn fingerprint_mismatching_identifiers() -> Result<()> {
-        use rand::rngs::OsRng;
-
-        use crate::IdentityKeyPair;
-
         let mut rng = OsRng.unwrap_err();
         let a_key_pair = IdentityKeyPair::generate(&mut rng);
         let b_key_pair = IdentityKeyPair::generate(&mut rng);
@@ -515,8 +471,9 @@ mod test {
 
     #[test]
     fn fingerprint_mismatching_versions() -> Result<()> {
-        let a_key = IdentityKey::decode(ALICE_IDENTITY)?;
-        let b_key = IdentityKey::decode(BOB_IDENTITY)?;
+        let mut rng = OsRng.unwrap_err();
+        let a_key = *IdentityKeyPair::generate(&mut rng).identity_key();
+        let b_key = *IdentityKeyPair::generate(&mut rng).identity_key();
 
         let iterations = 5200;
 

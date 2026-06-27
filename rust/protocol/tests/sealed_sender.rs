@@ -3,6 +3,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+// Sealed Sender depends on Diffie-Hellman against the identity key, which the post-quantum ML-DSA
+// identity cannot perform. These tests therefore only build with the (off-by-default)
+// `sealed_sender` feature.
+#![cfg(feature = "sealed_sender")]
+
 mod support;
 use std::time::SystemTime;
 

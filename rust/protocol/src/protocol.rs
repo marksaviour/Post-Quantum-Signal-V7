@@ -257,6 +257,10 @@ pub struct PreKeySignalMessage {
     pre_key_id: Option<PreKeyId>,
     signed_pre_key_id: SignedPreKeyId,
     kyber_payload: Option<KyberPayload>,
+    /// Optional one-time ML-KEM-1024 prekey ciphertext (ct2) in the fully PQ handshake.
+    pq_one_time_payload: Option<KyberPayload>,
+    /// The initiator's ML-DSA-87 signature over the handshake transcript.
+    identity_signature: Box<[u8]>,
     base_key: PublicKey,
     identity_key: IdentityKey,
     message: SignalMessage,
@@ -264,12 +268,15 @@ pub struct PreKeySignalMessage {
 }
 
 impl PreKeySignalMessage {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         message_version: u8,
         registration_id: u32,
         pre_key_id: Option<PreKeyId>,
         signed_pre_key_id: SignedPreKeyId,
         kyber_payload: Option<KyberPayload>,
+        pq_one_time_payload: Option<KyberPayload>,
+        identity_signature: Box<[u8]>,
         base_key: PublicKey,
         identity_key: IdentityKey,
         message: SignalMessage,
@@ -282,6 +289,13 @@ impl PreKeySignalMessage {
             kyber_ciphertext: kyber_payload
                 .as_ref()
                 .map(|kyber| kyber.ciphertext.to_vec()),
+            pq_one_time_pre_key_id: pq_one_time_payload
+                .as_ref()
+                .map(|kyber| kyber.pre_key_id.into()),
+            pq_one_time_ciphertext: pq_one_time_payload
+                .as_ref()
+                .map(|kyber| kyber.ciphertext.to_vec()),
+            identity_signature: Some(identity_signature.to_vec()),
             base_key: Some(base_key.serialize().into_vec()),
             identity_key: Some(identity_key.serialize().into_vec()),
             message: Some(Vec::from(message.as_ref())),
@@ -297,6 +311,8 @@ impl PreKeySignalMessage {
             pre_key_id,
             signed_pre_key_id,
             kyber_payload,
+            pq_one_time_payload,
+            identity_signature,
             base_key,
             identity_key,
             message,
@@ -332,6 +348,24 @@ impl PreKeySignalMessage {
     #[inline]
     pub fn kyber_ciphertext(&self) -> Option<&kem::SerializedCiphertext> {
         self.kyber_payload.as_ref().map(|kyber| &kyber.ciphertext)
+    }
+
+    #[inline]
+    pub fn pq_one_time_pre_key_id(&self) -> Option<KyberPreKeyId> {
+        self.pq_one_time_payload.as_ref().map(|kyber| kyber.pre_key_id)
+    }
+
+    #[inline]
+    pub fn pq_one_time_ciphertext(&self) -> Option<&kem::SerializedCiphertext> {
+        self.pq_one_time_payload
+            .as_ref()
+            .map(|kyber| &kyber.ciphertext)
+    }
+
+    /// The initiator's ML-DSA-87 signature over the handshake transcript.
+    #[inline]
+    pub fn identity_signature(&self) -> &[u8] {
+        &self.identity_signature
     }
 
     #[inline]
@@ -419,12 +453,33 @@ impl TryFrom<&[u8]> for PreKeySignalMessage {
             }
         };
 
+        let pq_one_time_payload = match (
+            proto_structure.pq_one_time_pre_key_id,
+            proto_structure.pq_one_time_ciphertext,
+        ) {
+            (Some(id), Some(ct)) => Some(KyberPayload::new(id.into(), ct.into_boxed_slice())),
+            (None, None) => None,
+            _ => {
+                return Err(SignalProtocolError::InvalidMessage(
+                    CiphertextMessageType::PreKey,
+                    "Both or neither one-time KEM pre_key_id and ciphertext can be present",
+                ));
+            }
+        };
+
+        let identity_signature = proto_structure
+            .identity_signature
+            .unwrap_or_default()
+            .into_boxed_slice();
+
         Ok(PreKeySignalMessage {
             message_version,
             registration_id: proto_structure.registration_id.unwrap_or(0),
             pre_key_id: proto_structure.pre_key_id.map(|id| id.into()),
             signed_pre_key_id: signed_pre_key_id.into(),
             kyber_payload,
+            pq_one_time_payload,
+            identity_signature,
             base_key,
             identity_key: IdentityKey::try_from(identity_key.as_ref())?,
             message: SignalMessage::try_from(message.as_ref())?,
@@ -901,7 +956,7 @@ mod tests {
     use rand::{CryptoRng, Rng, TryRngCore as _};
 
     use super::*;
-    use crate::KeyPair;
+    use crate::{IdentityKeyPair, KeyPair};
 
     fn create_signal_message<T>(csprng: &mut T) -> Result<SignalMessage>
     where
@@ -916,8 +971,8 @@ mod tests {
         let ciphertext = ciphertext;
 
         let sender_ratchet_key_pair = KeyPair::generate(csprng);
-        let sender_identity_key_pair = KeyPair::generate(csprng);
-        let receiver_identity_key_pair = KeyPair::generate(csprng);
+        let sender_identity_key_pair = IdentityKeyPair::generate(csprng);
+        let receiver_identity_key_pair = IdentityKeyPair::generate(csprng);
 
         SignalMessage::new(
             4,
@@ -926,8 +981,8 @@ mod tests {
             42,
             41,
             &ciphertext,
-            &sender_identity_key_pair.public_key.into(),
-            &receiver_identity_key_pair.public_key.into(),
+            sender_identity_key_pair.identity_key(),
+            receiver_identity_key_pair.identity_key(),
         )
     }
 
@@ -953,7 +1008,7 @@ mod tests {
     #[test]
     fn test_pre_key_signal_message_serialize_deserialize() -> Result<()> {
         let mut csprng = OsRng.unwrap_err();
-        let identity_key_pair = KeyPair::generate(&mut csprng);
+        let identity_key_pair = IdentityKeyPair::generate(&mut csprng);
         let base_key_pair = KeyPair::generate(&mut csprng);
         let message = create_signal_message(&mut csprng)?;
         let pre_key_signal_message = PreKeySignalMessage::new(
@@ -961,9 +1016,11 @@ mod tests {
             365,
             None,
             97.into(),
-            None, // TODO: add kyber prekeys
+            None, // signed KEM prekey payload
+            None, // one-time KEM prekey payload
+            Box::from(&b"transcript-signature"[..]),
             base_key_pair.public_key,
-            identity_key_pair.public_key.into(),
+            *identity_key_pair.identity_key(),
             message,
         )?;
         let deser_pre_key_signal_message =
@@ -1045,7 +1102,7 @@ mod tests {
     #[test]
     fn test_decryption_error_message() -> Result<()> {
         let mut csprng = OsRng.unwrap_err();
-        let identity_key_pair = KeyPair::generate(&mut csprng);
+        let identity_key_pair = IdentityKeyPair::generate(&mut csprng);
         let base_key_pair = KeyPair::generate(&mut csprng);
         let message = create_signal_message(&mut csprng)?;
         let timestamp: Timestamp = Timestamp::from_epoch_millis(0x2_0000_0001);
@@ -1072,9 +1129,11 @@ mod tests {
             365,
             None,
             97.into(),
-            None, // TODO: add kyber prekeys
+            None, // signed KEM prekey payload
+            None, // one-time KEM prekey payload
+            Box::from(&b"transcript-signature"[..]),
             base_key_pair.public_key,
-            identity_key_pair.public_key.into(),
+            *identity_key_pair.identity_key(),
             message,
         )?;
 

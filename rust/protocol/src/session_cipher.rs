@@ -97,12 +97,19 @@ pub async fn message_encrypt(
             .zip(items.kyber_ciphertext())
             .map(|(id, ciphertext)| KyberPayload::new(id, ciphertext.into()));
 
+        let pq_one_time_payload = items
+            .pq_one_time_pre_key_id()
+            .zip(items.pq_one_time_ciphertext())
+            .map(|(id, ciphertext)| KyberPayload::new(id, ciphertext.into()));
+
         CiphertextMessage::PreKeySignalMessage(PreKeySignalMessage::new(
             session_version,
             local_registration_id,
             items.pre_key_id(),
             items.signed_pre_key_id(),
             kyber_payload,
+            pq_one_time_payload,
+            items.identity_signature().into(),
             *items.base_key(),
             local_identity_key,
             message,
@@ -129,7 +136,7 @@ pub async fn message_encrypt(
     {
         log::warn!(
             "Identity key {} is not trusted for remote address {}",
-            hex::encode(their_identity_key.public_key().public_key_bytes()),
+            hex::encode(their_identity_key.serialize()),
             remote_address,
         );
         return Err(SignalProtocolError::UntrustedIdentity(
@@ -295,7 +302,7 @@ pub async fn message_decrypt_signal<R: Rng + CryptoRng>(
     {
         log::warn!(
             "Identity key {} is not trusted for remote address {}",
-            hex::encode(their_identity_key.public_key().public_key_bytes()),
+            hex::encode(their_identity_key.serialize()),
             remote_address,
         );
         return Err(SignalProtocolError::UntrustedIdentity(

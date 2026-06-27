@@ -94,7 +94,18 @@ pub fn session_encrypt_result(c: &mut Criterion) -> Result<(), SignalProtocolErr
         .private_key()
         .calculate_signature(&bob_signed_pre_key_public, &mut OsRng.unwrap_err())?;
 
+    // The fully PQ handshake also needs a signed ML-KEM-1024 prekey.
+    let bob_kyber_pre_key_pair = kem::KeyPair::generate(kem::KeyType::MLKEM1024, &mut OsRng.unwrap_err());
+    let bob_kyber_pre_key_public = bob_kyber_pre_key_pair.public_key.serialize();
+    let bob_kyber_pre_key_signature = bob_store
+        .get_identity_key_pair()
+        .now_or_never()
+        .expect("sync")?
+        .private_key()
+        .calculate_signature(&bob_kyber_pre_key_public, &mut OsRng.unwrap_err())?;
+
     let signed_pre_key_id = 22;
+    let kyber_pre_key_id = 23;
 
     let bob_pre_key_bundle = PreKeyBundle::new(
         bob_store
@@ -102,10 +113,12 @@ pub fn session_encrypt_result(c: &mut Criterion) -> Result<(), SignalProtocolErr
             .now_or_never()
             .expect("sync")?,
         1.into(),                 // device id
-        None,                     // pre key
         signed_pre_key_id.into(), // signed pre key id
         bob_signed_pre_key_pair.public_key,
         bob_signed_pre_key_signature.to_vec(),
+        kyber_pre_key_id.into(),
+        bob_kyber_pre_key_pair.public_key.clone(),
+        bob_kyber_pre_key_signature.to_vec(),
         *bob_store
             .get_identity_key_pair()
             .now_or_never()
@@ -121,6 +134,19 @@ pub fn session_encrypt_result(c: &mut Criterion) -> Result<(), SignalProtocolErr
                 Timestamp::from_epoch_millis(42),
                 &bob_signed_pre_key_pair,
                 &bob_signed_pre_key_signature,
+            ),
+        )
+        .now_or_never()
+        .expect("sync")?;
+
+    bob_store
+        .save_kyber_pre_key(
+            kyber_pre_key_id.into(),
+            &KyberPreKeyRecord::new(
+                kyber_pre_key_id.into(),
+                Timestamp::from_epoch_millis(42),
+                &bob_kyber_pre_key_pair,
+                &bob_kyber_pre_key_signature,
             ),
         )
         .now_or_never()

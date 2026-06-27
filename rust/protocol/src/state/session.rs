@@ -37,6 +37,9 @@ pub(crate) struct UnacknowledgedPreKeyMessageItems<'a> {
     base_key: PublicKey,
     kyber_pre_key_id: Option<KyberPreKeyId>,
     kyber_ciphertext: Option<&'a [u8]>,
+    pq_one_time_pre_key_id: Option<KyberPreKeyId>,
+    pq_one_time_ciphertext: Option<&'a [u8]>,
+    identity_signature: &'a [u8],
     timestamp: SystemTime,
 }
 
@@ -51,12 +54,28 @@ impl<'a> UnacknowledgedPreKeyMessageItems<'a> {
         let (kyber_pre_key_id, kyber_ciphertext) = pending_kyber_pre_key
             .map(|pending| (pending.pre_key_id.into(), pending.ciphertext.as_slice()))
             .unzip();
+        let pq_one_time_pre_key_id = pending_kyber_pre_key
+            .and_then(|pending| pending.pq_one_time_pre_key_id)
+            .map(Into::into);
+        let pq_one_time_ciphertext = pending_kyber_pre_key.and_then(|pending| {
+            if pending.pq_one_time_ciphertext.is_empty() {
+                None
+            } else {
+                Some(pending.pq_one_time_ciphertext.as_slice())
+            }
+        });
+        let identity_signature = pending_kyber_pre_key
+            .map(|pending| pending.identity_signature.as_slice())
+            .unwrap_or(&[]);
         Self {
             pre_key_id,
             signed_pre_key_id,
             base_key,
             kyber_pre_key_id,
             kyber_ciphertext,
+            pq_one_time_pre_key_id,
+            pq_one_time_ciphertext,
+            identity_signature,
             timestamp,
         }
     }
@@ -79,6 +98,18 @@ impl<'a> UnacknowledgedPreKeyMessageItems<'a> {
 
     pub(crate) fn kyber_ciphertext(&self) -> Option<&'a [u8]> {
         self.kyber_ciphertext
+    }
+
+    pub(crate) fn pq_one_time_pre_key_id(&self) -> Option<KyberPreKeyId> {
+        self.pq_one_time_pre_key_id
+    }
+
+    pub(crate) fn pq_one_time_ciphertext(&self) -> Option<&'a [u8]> {
+        self.pq_one_time_ciphertext
+    }
+
+    pub(crate) fn identity_signature(&self) -> &'a [u8] {
+        self.identity_signature
     }
 
     pub(crate) fn timestamp(&self) -> SystemTime {
@@ -455,6 +486,9 @@ impl SessionState {
         let pending = session_structure::PendingKyberPreKey {
             pre_key_id: u32::MAX, // has to be set to the actual value separately
             ciphertext: ciphertext.into_vec(),
+            pq_one_time_pre_key_id: None,
+            pq_one_time_ciphertext: Vec::new(),
+            identity_signature: Vec::new(),
         };
         self.session.pending_kyber_pre_key = Some(pending);
     }
@@ -469,6 +503,33 @@ impl SessionState {
             .as_mut()
             .expect("must have been set if kyber pre key is present");
         pending.pre_key_id = signed_kyber_pre_key_id.into();
+    }
+
+    pub(crate) fn set_pq_one_time_ciphertext(&mut self, ciphertext: kem::SerializedCiphertext) {
+        let pending = self
+            .session
+            .pending_kyber_pre_key
+            .as_mut()
+            .expect("set_kyber_ciphertext must be called before set_pq_one_time_ciphertext");
+        pending.pq_one_time_ciphertext = ciphertext.into_vec();
+    }
+
+    pub(crate) fn set_pq_one_time_pre_key_id(&mut self, one_time_kyber_pre_key_id: KyberPreKeyId) {
+        let pending = self
+            .session
+            .pending_kyber_pre_key
+            .as_mut()
+            .expect("must have been set if a one-time KEM pre key is present");
+        pending.pq_one_time_pre_key_id = Some(one_time_kyber_pre_key_id.into());
+    }
+
+    pub(crate) fn set_identity_signature(&mut self, signature: &[u8]) {
+        let pending = self
+            .session
+            .pending_kyber_pre_key
+            .as_mut()
+            .expect("set_kyber_ciphertext must be called before set_identity_signature");
+        pending.identity_signature = signature.to_vec();
     }
 
     pub(crate) fn unacknowledged_pre_key_message_items(
@@ -533,6 +594,26 @@ impl SessionState {
             .pending_kyber_pre_key
             .as_ref()
             .map(|pending| &pending.ciphertext)
+    }
+
+    pub(crate) fn get_pq_one_time_ciphertext(&self) -> Option<&Vec<u8>> {
+        self.session.pending_kyber_pre_key.as_ref().and_then(|p| {
+            if p.pq_one_time_ciphertext.is_empty() {
+                None
+            } else {
+                Some(&p.pq_one_time_ciphertext)
+            }
+        })
+    }
+
+    pub(crate) fn get_identity_signature(&self) -> Option<&Vec<u8>> {
+        self.session.pending_kyber_pre_key.as_ref().and_then(|p| {
+            if p.identity_signature.is_empty() {
+                None
+            } else {
+                Some(&p.identity_signature)
+            }
+        })
     }
 }
 
@@ -814,5 +895,31 @@ impl SessionRecord {
                 )
             })?
             .get_kyber_ciphertext())
+    }
+
+    /// The one-time ML-KEM-1024 ciphertext (ct2) stored on the initiator's pending session, if any.
+    pub fn get_pq_one_time_ciphertext(&self) -> Result<Option<&Vec<u8>>, SignalProtocolError> {
+        Ok(self
+            .session_state()
+            .ok_or_else(|| {
+                SignalProtocolError::InvalidState(
+                    "get_pq_one_time_ciphertext",
+                    "No current session".into(),
+                )
+            })?
+            .get_pq_one_time_ciphertext())
+    }
+
+    /// The initiator's ML-DSA-87 transcript signature stored on the pending session, if any.
+    pub fn get_identity_signature(&self) -> Result<Option<&Vec<u8>>, SignalProtocolError> {
+        Ok(self
+            .session_state()
+            .ok_or_else(|| {
+                SignalProtocolError::InvalidState(
+                    "get_identity_signature",
+                    "No current session".into(),
+                )
+            })?
+            .get_identity_signature())
     }
 }

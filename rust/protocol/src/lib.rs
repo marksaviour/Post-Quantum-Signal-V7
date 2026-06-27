@@ -24,6 +24,7 @@
 
 mod consts;
 mod crypto;
+pub mod dsa;
 pub mod error;
 mod fingerprint;
 mod group_cipher;
@@ -33,6 +34,12 @@ pub mod kem;
 mod proto;
 mod protocol;
 mod ratchet;
+// Sealed Sender relies on Diffie-Hellman key agreement against the long-term
+// identity key. The fully post-quantum PQXDH variant replaces the identity key
+// with an ML-DSA signing keypair (authentication only, no agreement), which is
+// structurally incompatible with Sealed Sender. It would need its own KEM-based
+// redesign, so it is gated out of this artefact behind an off-by-default feature.
+#[cfg(feature = "sealed_sender")]
 mod sealed_sender;
 mod sender_keys;
 mod session;
@@ -62,6 +69,7 @@ pub use ratchet::{
     initialize_alice_session_record, initialize_bob_session_record, AliceSignalProtocolParameters,
     BobSignalProtocolParameters,
 };
+#[cfg(feature = "sealed_sender")]
 pub use sealed_sender::{
     sealed_sender_decrypt, sealed_sender_decrypt_to_usmc, sealed_sender_encrypt,
     sealed_sender_encrypt_from_usmc, sealed_sender_multi_recipient_encrypt, ContentHint,

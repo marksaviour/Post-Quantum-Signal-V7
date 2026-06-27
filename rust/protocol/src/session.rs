@@ -10,9 +10,9 @@ use rand::{CryptoRng, Rng};
 use crate::ratchet::{AliceSignalProtocolParameters, BobSignalProtocolParameters};
 use crate::state::GenericSignedPreKey;
 use crate::{
-    kem, ratchet, Direction, IdentityKey, IdentityKeyStore, KeyPair, KyberPreKeyId,
-    KyberPreKeyStore, PreKeyBundle, PreKeyId, PreKeySignalMessage, PreKeyStore, ProtocolAddress,
-    Result, SessionRecord, SessionStore, SignalProtocolError, SignedPreKeyStore,
+    ratchet, Direction, IdentityKey, IdentityKeyStore, KeyPair, KyberPreKeyId, KyberPreKeyStore,
+    PreKeyBundle, PreKeyId, PreKeySignalMessage, PreKeyStore, ProtocolAddress, Result,
+    SessionRecord, SessionStore, SignalProtocolError, SignedPreKeyStore,
 };
 
 #[derive(Default)]
@@ -86,7 +86,7 @@ async fn process_prekey_impl(
     session_record: &mut SessionRecord,
     signed_prekey_store: &dyn SignedPreKeyStore,
     kyber_prekey_store: &dyn KyberPreKeyStore,
-    pre_key_store: &dyn PreKeyStore,
+    _pre_key_store: &dyn PreKeyStore,
     identity_store: &dyn IdentityKeyStore,
 ) -> Result<PreKeysUsed> {
     if session_record.promote_matching_session(
@@ -97,41 +97,57 @@ async fn process_prekey_impl(
         return Ok(Default::default());
     }
 
-    let our_signed_pre_key_pair = signed_prekey_store
+    // Bob's signed X25519 ratchet key (formerly the EC signed prekey).
+    let our_ratchet_key_pair = signed_prekey_store
         .get_signed_pre_key(message.signed_pre_key_id())
         .await?
         .key_pair()?;
 
-    // Because async closures are unstable
-    let our_kyber_pre_key_pair: Option<kem::KeyPair>;
-    if let Some(kyber_pre_key_id) = message.kyber_pre_key_id() {
-        our_kyber_pre_key_pair = Some(
+    // Bob's signed (last-resort) ML-KEM-1024 prekey, used to decapsulate ct1.
+    let kyber_pre_key_id = message.kyber_pre_key_id().ok_or_else(|| {
+        SignalProtocolError::InvalidMessage(
+            crate::CiphertextMessageType::PreKey,
+            "fully PQ PreKey message is missing its signed KEM prekey",
+        )
+    })?;
+    let our_signed_kem_pre_key_pair = kyber_prekey_store
+        .get_kyber_pre_key(kyber_pre_key_id)
+        .await?
+        .key_pair()?;
+
+    // Bob's optional one-time ML-KEM-1024 prekey, used to decapsulate ct2.
+    let our_one_time_kem_pre_key_pair = if let Some(one_time_id) = message.pq_one_time_pre_key_id() {
+        log::info!("processing PreKey message from {remote_address} with a one-time KEM prekey");
+        Some(
             kyber_prekey_store
-                .get_kyber_pre_key(kyber_pre_key_id)
+                .get_kyber_pre_key(one_time_id)
                 .await?
                 .key_pair()?,
+        )
+    } else {
+        log::warn!(
+            "processing PreKey message from {remote_address} which had no one-time KEM prekey"
         );
-    } else {
-        our_kyber_pre_key_pair = None;
-    }
-
-    let our_one_time_pre_key_pair = if let Some(pre_key_id) = message.pre_key_id() {
-        log::info!("processing PreKey message from {remote_address}");
-        Some(pre_key_store.get_pre_key(pre_key_id).await?.key_pair()?)
-    } else {
-        log::warn!("processing PreKey message from {remote_address} which had no one-time prekey");
         None
     };
 
+    let their_kem_ciphertext = message.kyber_ciphertext().ok_or_else(|| {
+        SignalProtocolError::InvalidMessage(
+            crate::CiphertextMessageType::PreKey,
+            "fully PQ PreKey message is missing its KEM ciphertext",
+        )
+    })?;
+
     let parameters = BobSignalProtocolParameters::new(
         identity_store.get_identity_key_pair().await?,
-        our_signed_pre_key_pair, // signed pre key
-        our_one_time_pre_key_pair,
-        our_signed_pre_key_pair, // ratchet key
-        our_kyber_pre_key_pair,
+        our_ratchet_key_pair,
+        our_signed_kem_pre_key_pair,
+        our_one_time_kem_pre_key_pair,
         *message.identity_key(),
         *message.base_key(),
-        message.kyber_ciphertext(),
+        their_kem_ciphertext,
+        message.pq_one_time_ciphertext(),
+        message.identity_signature(),
     );
 
     let mut new_session = ratchet::initialize_bob_session(&parameters)?;
@@ -142,8 +158,10 @@ async fn process_prekey_impl(
     session_record.promote_state(new_session);
 
     let pre_keys_used = PreKeysUsed {
-        pre_key_id: message.pre_key_id(),
-        kyber_pre_key_id: message.kyber_pre_key_id(),
+        pre_key_id: None,
+        // Only the one-time KEM prekey (if any) is consumed; the signed/last-resort
+        // KEM prekey is reused across sessions.
+        kyber_pre_key_id: message.pq_one_time_pre_key_id(),
     };
     Ok(pre_keys_used)
 }
@@ -167,18 +185,28 @@ pub async fn process_prekey_bundle<R: Rng + CryptoRng>(
         ));
     }
 
-    if !their_identity_key.public_key().verify_signature(
+    // Bob's signed X25519 ratchet key is authenticated by his ML-DSA identity.
+    if !their_identity_key.verify_signature(
         &bundle.signed_pre_key_public()?.serialize(),
         bundle.signed_pre_key_signature()?,
     ) {
         return Err(SignalProtocolError::SignatureValidationFailed);
     }
 
-    if let Some(kyber_public) = bundle.kyber_pre_key_public()? {
-        if !their_identity_key.public_key().verify_signature(
-            kyber_public.serialize().as_ref(),
+    // Bob's signed (last-resort) ML-KEM-1024 prekey is authenticated by his ML-DSA identity.
+    if !their_identity_key.verify_signature(
+        bundle.kyber_pre_key_public()?.serialize().as_ref(),
+        bundle.kyber_pre_key_signature()?,
+    ) {
+        return Err(SignalProtocolError::SignatureValidationFailed);
+    }
+
+    // Bob's optional one-time ML-KEM-1024 prekey is likewise authenticated.
+    if let Some(one_time_public) = bundle.one_time_kyber_pre_key_public()? {
+        if !their_identity_key.verify_signature(
+            one_time_public.serialize().as_ref(),
             bundle
-                .kyber_pre_key_signature()?
+                .one_time_kyber_pre_key_signature()?
                 .expect("signature must be present"),
         ) {
             return Err(SignalProtocolError::SignatureValidationFailed);
@@ -191,9 +219,7 @@ pub async fn process_prekey_bundle<R: Rng + CryptoRng>(
         .unwrap_or_else(SessionRecord::new_fresh);
 
     let our_base_key_pair = KeyPair::generate(&mut csprng);
-    let their_signed_prekey = bundle.signed_pre_key_public()?;
-
-    let their_one_time_prekey_id = bundle.pre_key_id()?;
+    let their_ratchet_key = bundle.signed_pre_key_public()?;
 
     let our_identity_key_pair = identity_store.get_identity_key_pair().await?;
 
@@ -201,34 +227,32 @@ pub async fn process_prekey_bundle<R: Rng + CryptoRng>(
         our_identity_key_pair,
         our_base_key_pair,
         *their_identity_key,
-        their_signed_prekey,
-        their_signed_prekey,
+        their_ratchet_key,
+        bundle.kyber_pre_key_public()?.clone(),
     );
-    if let Some(key) = bundle.pre_key_public()? {
-        parameters.set_their_one_time_pre_key(key);
-    }
-
-    if let Some(key) = bundle.kyber_pre_key_public()? {
-        parameters.set_their_kyber_pre_key(key);
+    if let Some(one_time_public) = bundle.one_time_kyber_pre_key_public()? {
+        parameters.set_their_one_time_kem_pre_key(one_time_public);
     }
 
     let mut session = ratchet::initialize_alice_session(&parameters, csprng)?;
 
     log::info!(
-        "set_unacknowledged_pre_key_message for: {} with preKeyId: {}",
+        "set_unacknowledged_pre_key_message for: {} with signed kyber preKeyId: {}",
         remote_address,
-        their_one_time_prekey_id.map_or_else(|| "<none>".to_string(), |id| id.to_string())
+        bundle.kyber_pre_key_id()?
     );
 
+    // No EC one-time prekey is used in the fully PQ handshake.
     session.set_unacknowledged_pre_key_message(
-        their_one_time_prekey_id,
+        None,
         bundle.signed_pre_key_id()?,
         &our_base_key_pair.public_key,
         now,
     );
 
-    if let Some(kyber_pre_key_id) = bundle.kyber_pre_key_id()? {
-        session.set_unacknowledged_kyber_pre_key_id(kyber_pre_key_id);
+    session.set_unacknowledged_kyber_pre_key_id(bundle.kyber_pre_key_id()?);
+    if let Some(one_time_id) = bundle.one_time_kyber_pre_key_id()? {
+        session.set_pq_one_time_pre_key_id(one_time_id);
     }
 
     session.set_local_registration_id(identity_store.get_local_registration_id().await?);

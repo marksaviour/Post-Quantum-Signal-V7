@@ -40,8 +40,16 @@ message SessionStructure {
   }
 
   message PendingKyberPreKey {
+    // Signed (last-resort) ML-KEM-1024 prekey: id and ciphertext ct1.
     uint32 pre_key_id = 1;
     bytes  ciphertext = 2;
+    // Fully post-quantum PQXDH additions, set by the initiator:
+    // Optional one-time ML-KEM-1024 prekey id and ciphertext ct2.
+    optional uint32 pq_one_time_pre_key_id = 3;
+    bytes  pq_one_time_ciphertext = 4;
+    // The initiator's ML-DSA-87 transcript signature, resent on every
+    // PreKeySignalMessage until the session is acknowledged.
+    bytes  identity_signature = 5;
   }
 
   uint32         session_version           = 1;
