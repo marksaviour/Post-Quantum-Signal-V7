@@ -129,6 +129,10 @@ hex = "0.4"
 hickory-proto = "0.24.1"
 hkdf = "0.12"
 hmac = "0.12.0"
+# Pure-Rust HQC KEM (RustCrypto/KEMs). Not yet on crates.io, so pin a git rev
+# for a reproducible artefact. Used to evaluate HQC-256 as a replacement for
+# ML-KEM-1024 in the PQXDH handshake.
+hqc-kem = { git = "https://github.com/RustCrypto/KEMs", rev = "8f1fd8cbb0a9dc8efeca294063fe31d5070b7ca0" }
 http = "1.0.0"
 http-body-util = "0.1.1"
 hyper = "1.3.1"
