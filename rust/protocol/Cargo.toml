@@ -93,4 +93,5 @@ required-features = ["sealed_sender"]
 [[bench]]
 name = "kem"
 harness = false
-required-features = ["kyber768"]
+# HQC-256 (default) plus ML-KEM-1024 for the head-to-head comparison.
+required-features = ["mlkem1024", "hqc256"]
