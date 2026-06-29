@@ -47,9 +47,11 @@ uuid = { workspace = true }
 zerocopy = { workspace = true, features = ["derive"] }
 
 [features]
-# The fully post-quantum PQXDH variant relies on ML-KEM-1024 KEM prekeys, so it
-# is enabled by default in this artefact.
-default = ["mlkem1024"]
+# The fully post-quantum PQXDH variant now uses HQC-256 KEM prekeys, so the
+# `hqc256` feature is enabled by default in this artefact. `mlkem1024` is kept
+# as a non-default feature so ML-KEM can still be built for the benchmark
+# comparison.
+default = ["hqc256"]
 # Sealed Sender requires Diffie-Hellman against the identity key, which the
 # post-quantum ML-DSA identity cannot do. It is therefore opt-in and not built
 # by default.

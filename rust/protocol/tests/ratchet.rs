@@ -7,7 +7,7 @@
 //!
 //! The classic X3DH known-answer vectors (`test_ratcheting_session_as_alice/bob`) used fixed
 //! Curve25519 identity keys and Diffie-Hellman agreement. Those no longer apply: the identity key
-//! is now ML-DSA-87 (authentication only) and the shared secret comes entirely from ML-KEM-1024
+//! is now ML-DSA-87 (authentication only) and the shared secret comes entirely from HQC-256
 //! encapsulations. These tests exercise the new construction directly.
 
 use libsignal_protocol::*;
@@ -25,10 +25,10 @@ fn alice_and_bob_agree(with_one_time_kem: bool) -> Result<(), SignalProtocolErro
     let bob_identity = IdentityKeyPair::generate(&mut csprng);
 
     let alice_base_key = KeyPair::generate(&mut csprng);
-    // Bob's signed X25519 ratchet key (used only by the Double Ratchet) and ML-KEM-1024 prekeys.
+    // Bob's signed X25519 ratchet key (used only by the Double Ratchet) and HQC-256 prekeys.
     let bob_ratchet_key = KeyPair::generate(&mut csprng);
-    let bob_signed_kem = kem::KeyPair::generate(kem::KeyType::MLKEM1024, &mut csprng);
-    let bob_one_time_kem = kem::KeyPair::generate(kem::KeyType::MLKEM1024, &mut csprng);
+    let bob_signed_kem = kem::KeyPair::generate(kem::KeyType::HQC256, &mut csprng);
+    let bob_one_time_kem = kem::KeyPair::generate(kem::KeyType::HQC256, &mut csprng);
 
     let mut alice_params = AliceSignalProtocolParameters::new(
         alice_identity,
@@ -114,7 +114,7 @@ fn test_bob_rejects_bad_transcript_signature() -> Result<(), SignalProtocolError
 
     let alice_base_key = KeyPair::generate(&mut csprng);
     let bob_ratchet_key = KeyPair::generate(&mut csprng);
-    let bob_signed_kem = kem::KeyPair::generate(kem::KeyType::MLKEM1024, &mut csprng);
+    let bob_signed_kem = kem::KeyPair::generate(kem::KeyType::HQC256, &mut csprng);
 
     let alice_params = AliceSignalProtocolParameters::new(
         alice_identity,

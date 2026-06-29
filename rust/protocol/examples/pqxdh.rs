@@ -13,7 +13,7 @@
 //!
 //! It walks through the whole construction:
 //!   * ML-DSA-87 identity keys (authentication only — no Diffie-Hellman),
-//!   * Bob's ML-KEM-1024 prekeys authenticated by his ML-DSA identity,
+//!   * Bob's HQC-256 prekeys authenticated by his ML-DSA identity,
 //!   * the KEM-only shared secret `0xFF*32 || ss1 || ss2`,
 //!   * Alice's ML-DSA transcript authenticator,
 //!   * agreement on identical chain keys with NO X25519 in the secret, and
@@ -26,7 +26,7 @@ use rand::TryRngCore as _;
 fn main() -> Result<(), SignalProtocolError> {
     let mut rng = OsRng.unwrap_err();
 
-    println!("=== Fully post-quantum PQXDH  (ML-KEM-1024 + ML-DSA-87) ===\n");
+    println!("=== Fully post-quantum PQXDH  (HQC-256 + ML-DSA-87) ===\n");
 
     // --- Long-term identities: ML-DSA-87 signing keypairs (no agreement) ---------------------
     let alice_identity = IdentityKeyPair::generate(&mut rng);
@@ -35,16 +35,16 @@ fn main() -> Result<(), SignalProtocolError> {
     // --- Bob's prekeys ----------------------------------------------------------------------
     // A small signed X25519 key used ONLY by the Double Ratchet (never in the handshake secret),
     let bob_ratchet_key = KeyPair::generate(&mut rng);
-    // a signed (last-resort) ML-KEM-1024 prekey, and an optional one-time ML-KEM-1024 prekey.
-    let bob_signed_kem = kem::KeyPair::generate(kem::KeyType::MLKEM1024, &mut rng);
-    let bob_one_time_kem = kem::KeyPair::generate(kem::KeyType::MLKEM1024, &mut rng);
+    // a signed (last-resort) HQC-256 prekey, and an optional one-time HQC-256 prekey.
+    let bob_signed_kem = kem::KeyPair::generate(kem::KeyType::HQC256, &mut rng);
+    let bob_one_time_kem = kem::KeyPair::generate(kem::KeyType::HQC256, &mut rng);
 
     println!("Primitive sizes (bytes, excluding 1-byte type tags):");
     println!("  ML-DSA-87 identity public key : {}", dsa::PUBLIC_KEY_LENGTH);
     println!("  ML-DSA-87 identity secret key : {}", dsa::SECRET_KEY_LENGTH);
     println!("  ML-DSA-87 signature           : {}", dsa::SIGNATURE_LENGTH);
     println!(
-        "  ML-KEM-1024 public key        : {}",
+        "  HQC-256 public key            : {}",
         bob_signed_kem.public_key.serialize().len() - 1
     );
 
@@ -55,7 +55,7 @@ fn main() -> Result<(), SignalProtocolError> {
         .identity_key()
         .verify_signature(&signed_kem_public, &bob_prekey_signature);
     println!(
-        "\n[1] Bob signs his ML-KEM prekey with ML-DSA; Alice verifies it: {}",
+        "\n[1] Bob signs his HQC prekey with ML-DSA; Alice verifies it: {}",
         if verified { "OK" } else { "FAILED" }
     );
     assert!(verified);
@@ -89,7 +89,7 @@ fn main() -> Result<(), SignalProtocolError> {
         .clone();
 
     println!(
-        "[2] Alice encapsulates to Bob's signed + one-time ML-KEM prekeys -> ct1 ({} B), ct2 ({} B)",
+        "[2] Alice encapsulates to Bob's signed + one-time HQC prekeys -> ct1 ({} B), ct2 ({} B)",
         ct1.len(),
         ct2.len()
     );
@@ -151,7 +151,7 @@ fn main() -> Result<(), SignalProtocolError> {
         .identity_key()
         .verify_signature(&signed_kem_public, &bad_prekey_sig);
     println!(
-        "[neg] Tampered ML-KEM prekey signature correctly REJECTED: {}",
+        "[neg] Tampered HQC prekey signature correctly REJECTED: {}",
         if prekey_ok { "NO (bug!)" } else { "yes" }
     );
     assert!(!prekey_ok);

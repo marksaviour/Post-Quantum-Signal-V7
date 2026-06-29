@@ -94,8 +94,8 @@ pub fn session_encrypt_result(c: &mut Criterion) -> Result<(), SignalProtocolErr
         .private_key()
         .calculate_signature(&bob_signed_pre_key_public, &mut OsRng.unwrap_err())?;
 
-    // The fully PQ handshake also needs a signed ML-KEM-1024 prekey.
-    let bob_kyber_pre_key_pair = kem::KeyPair::generate(kem::KeyType::MLKEM1024, &mut OsRng.unwrap_err());
+    // The fully PQ handshake also needs a signed HQC-256 prekey.
+    let bob_kyber_pre_key_pair = kem::KeyPair::generate(kem::KeyType::HQC256, &mut OsRng.unwrap_err());
     let bob_kyber_pre_key_public = bob_kyber_pre_key_pair.public_key.serialize();
     let bob_kyber_pre_key_signature = bob_store
         .get_identity_key_pair()
