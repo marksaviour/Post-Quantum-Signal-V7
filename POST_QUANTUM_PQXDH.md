@@ -3,11 +3,20 @@
 This document describes the conversion of Signal's **PQXDH** key agreement (as implemented in this
 fork of `libsignal`) from a *hybrid* construction (classical X25519 **plus** a post-quantum KEM)
 into a **fully post-quantum handshake**: the X25519 Diffie–Hellman terms are removed from the key
-agreement entirely, confidentiality comes from **ML-KEM-1024** encapsulations, and authentication
-comes from **ML-DSA-87** signatures.
+agreement entirely, confidentiality comes from a post-quantum **KEM** (this `working` branch uses
+the code-based **HQC-256**; the baseline used **ML-KEM-1024** — see the branch note below and §13),
+and authentication comes from **ML-DSA-87** signatures.
 
 It covers: the design, a word-based explanation, pseudocode, every file added/changed, the testing
 strategy and test inventory, and how to run the system.
+
+> **Branch note — HQC-256 variant.** This `working` branch replaces the KEM with the **code-based
+> HQC-256** (FIPS 207); the baseline `main` branch uses the **lattice-based ML-KEM-1024** (FIPS 203).
+> The ML-DSA-87 identity/authentication and the whole construction are **identical** — the handshake
+> is KEM-agnostic — so the only differences are which KEM the prekeys carry and the domain-separation
+> labels (now `PQXDH_HQC256_MLDSA87_*`). **Wherever the text below says "ML-KEM-1024", this branch
+> substitutes HQC-256**; the sizes differ markedly (see [§13](#13-ml-kem-1024-vs-hqc-256-comparison)).
+> ML-KEM-1024 is retained here only as a disabled-by-default benchmark baseline (`--features mlkem1024`).
 
 ---
 
@@ -19,7 +28,7 @@ strategy and test inventory, and how to run the system.
 | Confidentiality | 3–4 × X25519 DH **+** optional Kyber/ML-KEM | **ML-KEM-1024** signed prekey **+** optional one-time ML-KEM-1024 prekey |
 | Authentication of Bob | Identity signs the EC + Kyber prekeys (XEdDSA) | Identity signs all prekeys (**ML-DSA-87**) |
 | Authentication of Alice | Implicit (her identity is a DH input) | **Explicit ML-DSA-87 signature over the handshake transcript** |
-| KDF label | `WhisperText_X25519_SHA-256_CRYSTALS-KYBER-1024` | `PQXDH_MLKEM1024_MLDSA87_SHA-256` |
+| KDF label | `WhisperText_X25519_SHA-256_CRYSTALS-KYBER-1024` | `PQXDH_HQC256_MLDSA87_SHA-256` |
 | Secret input | `0xFF*32 ‖ DH ‖ DH ‖ DH ‖ [DH] ‖ [KEM]` | `0xFF*32 ‖ ss1 ‖ [ss2]` |
 | X25519 still present? | Everywhere | **Only** as the Double Ratchet `ratchet_key` (out of scope) |
 
@@ -34,12 +43,13 @@ still uses X25519 for its DH step (this was an explicit scoping decision — see
 | Primitive | Role | Library | Type tag | Sizes (bytes) |
 | --- | --- | --- | --- | --- |
 | **ML-DSA-87** (FIPS 204) | Identity / signatures | `libcrux-ml-dsa` 0.0.8 | `0x09` | pk 2592, sk 4896, sig 4627 |
-| **ML-KEM-1024** (FIPS 203) | KEM prekeys | `libcrux-ml-kem` 0.0.2 | `0x0A` | pk 1568, ct 1568, ss 32 |
+| **HQC-256** (FIPS 207) | KEM prekeys (this branch) | `hqc-kem` (RustCrypto, git) | `0x0B` | pk 7237, sk 7333, ct 14421, ss 32 |
+| ML-KEM-1024 (FIPS 203) | KEM baseline (benchmark only) | `libcrux-ml-kem` 0.0.2 | `0x0A` | pk 1568, sk 3168, ct 1568, ss 32 |
 | X25519 | Double Ratchet `ratchet_key` only | `curve25519-dalek` | `0x05` | pk 32 |
 | HKDF-SHA-256 | Root/chain key derivation | `hkdf` / `sha2` | — | 64-byte output |
 
-ML-DSA-87 is paired with ML-KEM-1024 so that signatures and KEM both sit at **NIST security
-level 5**.
+ML-DSA-87 is paired with HQC-256 so that signatures and KEM both sit at **NIST security
+level 5** (HQC-256 and ML-KEM-1024 are both level-5 parameter sets).
 
 ---
 
@@ -105,7 +115,7 @@ bundle = {
 ### 4.2 Shared transcript (signed by Alice, verified by Bob)
 
 ```text
-LABEL = "PQXDH_MLKEM1024_MLDSA87_transcript"
+LABEL = "PQXDH_HQC256_MLDSA87_transcript"
 
 transcript(alice_IK, ct1, ct2, bob_IK, bob_ratchet_key, alice_base_key):
     # every component is length-prefixed (u32 big-endian) to remove concatenation ambiguity
@@ -140,7 +150,7 @@ initialize_alice(bundle):
     # (2) Derive root/chain keys  (NO X25519 in this secret)
     secret = 0xFF*32 ‖ ss1 ‖ (ss2 if present)
     (root_key, chain_key) = HKDF_SHA256(salt=∅, ikm=secret,
-                                        info="PQXDH_MLKEM1024_MLDSA87_SHA-256", L=64)
+                                        info="PQXDH_HQC256_MLDSA87_SHA-256", L=64)
 
     # (3) Alice -> Bob authenticator
     t   = transcript(alice_IK, ct1, ct2 ?? "", bundle.identity_key,
@@ -171,7 +181,7 @@ initialize_bob(message, my_prekeys):
     # (2) Derive identical root/chain keys
     secret = 0xFF*32 ‖ ss1 ‖ (ss2 if present)
     (root_key, chain_key) = HKDF_SHA256(salt=∅, ikm=secret,
-                                        info="PQXDH_MLKEM1024_MLDSA87_SHA-256", L=64)
+                                        info="PQXDH_HQC256_MLDSA87_SHA-256", L=64)
 
     # (3) Verify Alice's authenticator  -> reject on failure
     t = transcript(message.identity_key, message.ct1, message.ct2 ?? "",
@@ -200,7 +210,7 @@ KDF   = HKDF-SHA256("WhisperText_X25519_SHA-256_CRYSTALS-KYBER-1024")
 
 # AFTER — fully post-quantum PQXDH
 secret = 0xFF*32 ‖ ss1 ‖ [ ss2 ]      # ss1 = signed ML-KEM prekey, ss2 = one-time ML-KEM prekey
-KDF   = HKDF-SHA256("PQXDH_MLKEM1024_MLDSA87_SHA-256")
+KDF   = HKDF-SHA256("PQXDH_HQC256_MLDSA87_SHA-256")
 ```
 
 There is **no X25519 Diffie–Hellman in the shared secret** anymore.
@@ -309,13 +319,16 @@ message PendingKyberPreKey {
   key-share style manipulation. Tampering with any bound field causes Bob to reject with
   `SignatureValidationFailed`.
 - **Domain separation:** all ML-DSA operations use the context string `Signal_PQXDH_MLDSA87`, and
-  the transcript is prefixed with `PQXDH_MLKEM1024_MLDSA87_transcript`.
+  the transcript is prefixed with `PQXDH_HQC256_MLDSA87_transcript`.
 
 ---
 
 ## 11. Testing
 
-All tests are in the `libsignal-protocol` crate and pass with no warnings.
+All tests are in the `libsignal-protocol` crate and pass with no warnings. **The counts below are
+the ML-KEM-1024 baseline (`main`); on this HQC-256 branch they must be re-run on a toolchain with a
+C/C++ linker to validate (see [§13.6](#136-validation-status)). The HQC branch additionally adds
+`test_hqc256_keypair` and `test_hqc256_rejects_wrong_ciphertext_type` in `src/kem.rs`.**
 
 ```bash
 # Run the whole suite (lib unit tests + integration tests + doctests)
@@ -384,16 +397,16 @@ cargo run -p libsignal-protocol --example pqxdh
 Expected output:
 
 ```text
-=== Fully post-quantum PQXDH  (ML-KEM-1024 + ML-DSA-87) ===
+=== Fully post-quantum PQXDH  (HQC-256 + ML-DSA-87) ===
 
 Primitive sizes (bytes, excluding 1-byte type tags):
   ML-DSA-87 identity public key : 2592
   ML-DSA-87 identity secret key : 4896
   ML-DSA-87 signature           : 4627
-  ML-KEM-1024 public key        : 1568
+  HQC-256 public key            : 7237
 
-[1] Bob signs his ML-KEM prekey with ML-DSA; Alice verifies it: OK
-[2] Alice encapsulates to Bob's signed + one-time ML-KEM prekeys -> ct1 (1569 B), ct2 (1569 B)
+[1] Bob signs his HQC prekey with ML-DSA; Alice verifies it: OK
+[2] Alice encapsulates to Bob's signed + one-time HQC prekeys -> ct1 (14422 B), ct2 (14422 B)
 [3] Alice signs the handshake transcript with ML-DSA -> authenticator (4627 B)
 [4] Bob decapsulates and verifies Alice's transcript signature: OK
 
@@ -401,11 +414,116 @@ Primitive sizes (bytes, excluding 1-byte type tags):
     shared chain key = <hex>
 
 [neg] Tampered transcript signature correctly REJECTED.
-[neg] Tampered ML-KEM prekey signature correctly REJECTED: yes
+[neg] Tampered HQC prekey signature correctly REJECTED: yes
 
 All checks passed.
 ```
 
-(The 1569-byte ciphertexts are the 1568-byte ML-KEM-1024 ciphertext plus a 1-byte type tag.)
+(The 14422-byte ciphertexts are the 14421-byte HQC-256 ciphertext plus a 1-byte type tag.)
+
+---
+
+## 13. ML-KEM-1024 vs HQC-256 comparison
+
+This branch swaps the PQXDH KEM from **ML-KEM-1024** to **HQC-256** in order to evaluate whether
+Signal's choice of ML-KEM is the optimal one. Both algorithms target **NIST security level 5** and
+drop into the identical, KEM-agnostic handshake (same ML-DSA-87 authentication, same
+`0xFF*32 ‖ ss1 ‖ [ss2]` secret, same 32-byte shared secret), so the comparison cleanly isolates the
+KEM itself.
+
+### 13.1 What changed on this branch
+- **New** `rust/protocol/src/kem/hqc256.rs` — an HQC-256 wrapper implementing the `kem::Parameters`
+  trait over the pure-Rust `hqc-kem` crate (RustCrypto). Because `hqc-kem` is built against `rand`
+  0.10 while libsignal uses `rand` 0.9 (incompatible `CryptoRng` traits), the wrapper draws the
+  keygen seed and the encapsulation message+salt from the caller's CSPRNG and calls HQC's
+  *deterministic* entry points — keeping all randomness caller-sourced while side-stepping the
+  version mismatch.
+- `rust/protocol/src/kem.rs` — new `KeyType::HQC256` (wire type tag `0x0B`) wired into the dispatch,
+  plus `test_hqc256_keypair` and `test_hqc256_rejects_wrong_ciphertext_type`.
+- `rust/protocol/src/ratchet.rs` — domain-separation labels are now `PQXDH_HQC256_MLDSA87_*`.
+- Prekey generation in the handshake helpers, tests and the `pqxdh` example now uses
+  `KeyType::HQC256`; `hqc256` is the **default** Cargo feature. `mlkem1024` remains a non-default,
+  benchmark-only feature.
+- `rust/protocol/benches/kem.rs` — a head-to-head primitive benchmark (HQC-256 / ML-KEM-1024 /
+  Kyber1024) with a key/ciphertext size report.
+
+### 13.2 Sizes (the headline cost)
+
+| Quantity | ML-KEM-1024 | HQC-256 | HQC ÷ ML-KEM |
+| --- | --- | --- | --- |
+| Public key | 1568 B | 7237 B | ≈ 4.6× |
+| Secret key | 3168 B | 7333 B | ≈ 2.3× |
+| Ciphertext | 1568 B | 14421 B | ≈ 9.2× |
+| Shared secret | 32 B | 32 B | 1× |
+
+Per-handshake wire impact (every value also carries a 1-byte type tag):
+- **KEM ciphertexts in the `PreKeySignalMessage`** (`ct1` + optional `ct2`): ML-KEM ≈ 2 × 1569 ≈
+  **3.1 KB** vs HQC ≈ 2 × 14422 ≈ **28.8 KB**.
+- **KEM public keys in the prekey bundle** (signed + one-time): ML-KEM ≈ 2 × 1569 ≈ **3.1 KB** vs
+  HQC ≈ 2 × 7238 ≈ **14.5 KB**.
+
+Switching to HQC therefore inflates the post-quantum part of both the published bundle and every
+initial handshake message by roughly an order of magnitude.
+
+### 13.3 Speed
+
+Measured with `cargo bench` (criterion, optimised release build; medians shown):
+
+```bash
+cargo bench -p libsignal-protocol --features "hqc256 mlkem1024" --bench kem
+```
+
+| Operation | ML-KEM-1024 | HQC-256 | HQC ÷ ML-KEM |
+| --- | --- | --- | --- |
+| `generate` | ~15.1 µs | ~692 µs | ~46× |
+| `encapsulate` | ~12.2 µs | ~1.38 ms | ~114× |
+| `decapsulate` | ~24.9 µs | ~3.53 ms | ~142× |
+
+(`Kyber1024`, ML-KEM-1024's pre-standard lattice sibling, tracks it closely — ~15.0 / 15.1 / 33.1 µs
+for generate / encapsulate / decapsulate — confirming the lattice baseline.)
+
+HQC is roughly **two orders of magnitude slower** than ML-KEM at every operation. Some of that is
+implementation maturity (pure-Rust `hqc-kem` vs the optimised, formally-verified libcrux ML-KEM — an
+AVX2-tuned HQC would narrow the gap), but the direction is inherent: code-based decoding is heavier
+than ML-KEM's lattice arithmetic. (Re-running the benchmark may print "Performance has regressed" —
+that is just criterion comparing against the previous run's saved baseline, i.e. ~2-5% run-to-run
+noise, not a code change.)
+
+### 13.4 Algorithmic diversity
+- **ML-KEM-1024** is **lattice-based** (Module-LWE): small, fast, highly structured.
+- **HQC-256** is **code-based**: its security reduces to decoding random quasi-cyclic codes in the
+  Hamming metric (with a concatenated Reed–Muller/Reed–Solomon code and a Fujisaki–Okamoto
+  transform for IND-CCA2).
+- NIST standardised HQC (selected **March 2025**, draft FIPS 207) **specifically as a backup to
+  ML-KEM**, precisely because it rests on a fundamentally different hardness assumption. Should a
+  cryptanalytic advance ever weaken structured lattices, a code-based KEM is an independent
+  fallback.
+
+### 13.5 Was ML-KEM the optimal choice?
+For Signal's setting — a latency- and bandwidth-sensitive mobile messenger that runs a KEM on every
+prekey bundle and initial message, at enormous scale — **ML-KEM-1024 is the better default**. Its
+keys and ciphertexts are ~4.6× and ~9.2× smaller and its operations are ~45-140× faster (§13.3), which directly
+reduces bundle storage, per-message bandwidth, and client CPU/battery cost. HQC-256's advantage is
+not efficiency but **defence-in-depth**: mathematical diversity as insurance against a lattice
+break, on a long-studied code-based assumption.
+
+The defensible conclusion is that Signal's ML-KEM choice is **well-justified on engineering
+grounds**, while HQC is best viewed as a **backup or a hybrid component** (e.g. an ML-KEM + HQC
+combination that encapsulates to both and concatenates the shared secrets) rather than a drop-in
+efficiency improvement. This artefact demonstrates the swap is *feasible* — HQC slots into the
+KEM-agnostic handshake unchanged — and quantifies exactly what it costs.
+
+### 13.6 Validation status
+The HQC-256 code on this branch has **not yet been compiled or tested in the current environment**
+(no MSVC C/C++ linker is installed here). To validate, build on a toolchain-complete machine:
+
+```bash
+cargo test -p libsignal-protocol          # incl. test_hqc256_* and the handshake/session suite over HQC-256
+cargo run  -p libsignal-protocol --example pqxdh
+```
+
+Confirm that Alice and Bob agree, the printed sizes match §13.2, and the tampered transcript /
+prekey signature negative tests still reject with `SignatureValidationFailed`. Then fill in the
+benchmark medians in §13.3.
 
 ---

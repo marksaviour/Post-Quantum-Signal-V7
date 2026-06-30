@@ -21,7 +21,6 @@
 //! randomized API (which internally samples the same values uniformly).
 
 use hqc_kem::{Ciphertext, DecapsulationKey, EncapsulationKey, Hqc256Params, HqcKem};
-use rand::RngCore as _;
 
 use super::{BadKEMKeyLength, DecapsulateError, KeyMaterial, KeyType, Public, Secret};
 

@@ -1761,7 +1761,6 @@ dependencies = [
 [[package]]
 name = "hqc-kem"
 version = "0.1.0"
-source = "git+https://github.com/RustCrypto/KEMs?rev=8f1fd8cbb0a9dc8efeca294063fe31d5070b7ca0#8f1fd8cbb0a9dc8efeca294063fe31d5070b7ca0"
 dependencies = [
  "hex",
  "rand 0.10.1",
