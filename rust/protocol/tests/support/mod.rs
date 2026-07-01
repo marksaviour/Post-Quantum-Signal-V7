@@ -75,8 +75,8 @@ pub async fn create_pre_key_bundle<R: Rng + CryptoRng>(
         .private_key()
         .calculate_signature(&signed_pre_key_public, &mut csprng)?;
 
-    // Bob's signed (last-resort) ML-KEM-1024 prekey.
-    let kyber_pre_key_pair = kem::KeyPair::generate(kem::KeyType::MLKEM1024, &mut csprng);
+    // Bob's signed (last-resort) HQC-256 prekey.
+    let kyber_pre_key_pair = kem::KeyPair::generate(kem::KeyType::HQC256, &mut csprng);
     let kyber_pre_key_public = kyber_pre_key_pair.public_key.serialize();
     let kyber_pre_key_signature = store
         .get_identity_key_pair()
@@ -84,8 +84,8 @@ pub async fn create_pre_key_bundle<R: Rng + CryptoRng>(
         .private_key()
         .calculate_signature(&kyber_pre_key_public, &mut csprng)?;
 
-    // Bob's one-time ML-KEM-1024 prekey.
-    let one_time_kyber_pre_key_pair = kem::KeyPair::generate(kem::KeyType::MLKEM1024, &mut csprng);
+    // Bob's one-time HQC-256 prekey.
+    let one_time_kyber_pre_key_pair = kem::KeyPair::generate(kem::KeyType::HQC256, &mut csprng);
     let one_time_kyber_pre_key_public = one_time_kyber_pre_key_pair.public_key.serialize();
     let one_time_kyber_pre_key_signature = store
         .get_identity_key_pair()
@@ -157,13 +157,13 @@ pub async fn create_pre_key_bundle<R: Rng + CryptoRng>(
 }
 
 /// Initialize a fully post-quantum session pair *without* a one-time KEM prekey (only the signed
-/// last-resort ML-KEM-1024 prekey contributes a shared secret).
+/// last-resort HQC-256 prekey contributes a shared secret).
 pub fn initialize_sessions_v3() -> Result<(SessionRecord, SessionRecord), SignalProtocolError> {
     initialize_pq_sessions(false)
 }
 
 /// Initialize a fully post-quantum session pair *with* a one-time KEM prekey (both the signed and
-/// the one-time ML-KEM-1024 prekeys contribute shared secrets).
+/// the one-time HQC-256 prekeys contribute shared secrets).
 pub fn initialize_sessions_v4() -> Result<(SessionRecord, SessionRecord), SignalProtocolError> {
     initialize_pq_sessions(true)
 }
@@ -177,11 +177,11 @@ fn initialize_pq_sessions(
 
     let alice_base_key = KeyPair::generate(&mut csprng);
 
-    // Bob's signed X25519 ratchet key (Double Ratchet only) and his signed ML-KEM-1024 prekey.
+    // Bob's signed X25519 ratchet key (Double Ratchet only) and his signed HQC-256 prekey.
     let bob_ratchet_key = KeyPair::generate(&mut csprng);
-    let bob_kyber_key = kem::KeyPair::generate(kem::KeyType::MLKEM1024, &mut csprng);
+    let bob_kyber_key = kem::KeyPair::generate(kem::KeyType::HQC256, &mut csprng);
     let bob_one_time_kyber_key =
-        kem::KeyPair::generate(kem::KeyType::MLKEM1024, &mut csprng);
+        kem::KeyPair::generate(kem::KeyType::HQC256, &mut csprng);
 
     let mut alice_params = AliceSignalProtocolParameters::new(
         alice_identity,
@@ -341,7 +341,7 @@ impl TestStoreBuilder {
                 "Signed pre key ids should be increasing"
             );
         }
-        let pair = kem::KeyPair::generate(kem::KeyType::Kyber1024, &mut self.rng);
+        let pair = kem::KeyPair::generate(kem::KeyType::HQC256, &mut self.rng);
         let public = pair.public_key.serialize();
         let signature = self.sign(&public);
         let record = KyberPreKeyRecord::new(

@@ -12,7 +12,10 @@
 //! `SecretKey::decapsulate(ct: Ciphertext)` to construct the same `SharedSecret`.
 //!
 //! # Supported KEMs
-//! The NIST standardized Kyber1024 and Kyber768 KEMs are currently supported.
+//! The NIST standardized Kyber1024 and Kyber768 KEMs are supported, together
+//! with ML-KEM-1024 (FIPS 203) and the code-based HQC-256 KEM (FIPS 207). The
+//! latter two back the fully post-quantum PQXDH handshake and let us compare a
+//! lattice-based KEM against a code-based one.
 //!
 //! # Serialization
 //! `PublicKey`s and `SecretKey`s have serialization functions that encode the
@@ -57,6 +60,8 @@ mod kyber1024;
 mod kyber768;
 #[cfg(feature = "mlkem1024")]
 mod mlkem1024;
+#[cfg(feature = "hqc256")]
+mod hqc256;
 
 use std::marker::PhantomData;
 
@@ -206,6 +211,9 @@ pub enum KeyType {
     /// ML-KEM 1024 key
     #[cfg(feature = "mlkem1024")]
     MLKEM1024,
+    /// HQC-256 key
+    #[cfg(feature = "hqc256")]
+    HQC256,
 }
 
 impl KeyType {
@@ -216,6 +224,8 @@ impl KeyType {
             KeyType::Kyber1024 => 0x08,
             #[cfg(feature = "mlkem1024")]
             KeyType::MLKEM1024 => 0x0A,
+            #[cfg(feature = "hqc256")]
+            KeyType::HQC256 => 0x0B,
         }
     }
 
@@ -229,6 +239,8 @@ impl KeyType {
             KeyType::Kyber1024 => &kyber1024::Parameters,
             #[cfg(feature = "mlkem1024")]
             KeyType::MLKEM1024 => &mlkem1024::Parameters,
+            #[cfg(feature = "hqc256")]
+            KeyType::HQC256 => &hqc256::Parameters,
         }
     }
 }
@@ -243,6 +255,8 @@ impl TryFrom<u8> for KeyType {
             0x08 => Ok(KeyType::Kyber1024),
             #[cfg(feature = "mlkem1024")]
             0x0A => Ok(KeyType::MLKEM1024),
+            #[cfg(feature = "hqc256")]
+            0x0B => Ok(KeyType::HQC256),
             t => Err(SignalProtocolError::BadKEMKeyType(t)),
         }
     }
@@ -659,6 +673,46 @@ mod tests {
         );
         let ss_for_recipient = kp.secret_key.decapsulate(&ct).expect("decapsulation works");
         assert_eq!(ss_for_recipient, ss_for_sender);
+    }
+
+    #[cfg(feature = "hqc256")]
+    #[test]
+    fn test_hqc256_keypair() {
+        let mut rng = rand::rngs::OsRng.unwrap_err();
+        let kp = KeyPair::generate(KeyType::HQC256, &mut rng);
+        assert_eq!(
+            hqc256::Parameters::SECRET_KEY_LENGTH + 1,
+            kp.secret_key.serialize().len()
+        );
+        assert_eq!(
+            hqc256::Parameters::PUBLIC_KEY_LENGTH + 1,
+            kp.public_key.serialize().len()
+        );
+        let (ss_for_sender, ct) = kp
+            .public_key
+            .encapsulate(&mut rng)
+            .expect("encapsulation works");
+        assert_eq!(hqc256::Parameters::CIPHERTEXT_LENGTH + 1, ct.len());
+        assert_eq!(hqc256::Parameters::SHARED_SECRET_LENGTH, ss_for_sender.len());
+        let ss_for_recipient = kp.secret_key.decapsulate(&ct).expect("decapsulation works");
+        assert_eq!(ss_for_recipient, ss_for_sender);
+    }
+
+    #[cfg(feature = "hqc256")]
+    #[test]
+    fn test_hqc256_rejects_wrong_ciphertext_type() {
+        // A ciphertext for a different KEM must be rejected by an HQC-256 key.
+        let mut rng = rand::rngs::OsRng.unwrap_err();
+        let hqc = KeyPair::generate(KeyType::HQC256, &mut rng);
+        let kyber = KeyPair::generate(KeyType::Kyber1024, &mut rng);
+        let (_ss, kyber_ct) = kyber
+            .public_key
+            .encapsulate(&mut rng)
+            .expect("encapsulation works");
+        assert!(matches!(
+            hqc.secret_key.decapsulate(&kyber_ct),
+            Err(crate::SignalProtocolError::WrongKEMKeyType(_, _))
+        ));
     }
 
     #[test]

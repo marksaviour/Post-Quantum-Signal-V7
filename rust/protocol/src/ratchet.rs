@@ -17,12 +17,12 @@ use crate::{IdentityKey, KeyPair, PublicKey, Result, SessionRecord, SignalProtoc
 /// HKDF label for the fully post-quantum PQXDH key derivation.
 ///
 /// The secret input is `0xFF*32 || ss1 || ss2`, where `ss1`/`ss2` are the
-/// ML-KEM-1024 shared secrets from the signed and (optional) one-time KEM
+/// HQC-256 shared secrets from the signed and (optional) one-time KEM
 /// prekeys. No X25519 agreement contributes to this secret.
-const PQXDH_LABEL: &[u8] = b"PQXDH_MLKEM1024_MLDSA87_SHA-256";
+const PQXDH_LABEL: &[u8] = b"PQXDH_HQC256_MLDSA87_SHA-256";
 
 /// Domain-separation label prefixed to the signed handshake transcript.
-const PQXDH_TRANSCRIPT_LABEL: &[u8] = b"PQXDH_MLKEM1024_MLDSA87_transcript";
+const PQXDH_TRANSCRIPT_LABEL: &[u8] = b"PQXDH_HQC256_MLDSA87_transcript";
 
 fn derive_keys(secret_input: &[u8]) -> (RootKey, ChainKey) {
     derive_keys_with_label(PQXDH_LABEL, secret_input)
@@ -90,7 +90,7 @@ pub(crate) fn initialize_alice_session<R: Rng + CryptoRng>(
 
     let sending_ratchet_key = KeyPair::generate(&mut csprng);
 
-    // Confidentiality + forward secrecy come entirely from ML-KEM-1024:
+    // Confidentiality + forward secrecy come entirely from HQC-256:
     //   ss1 <- encapsulate to Bob's signed (last-resort) KEM prekey   [mandatory]
     //   ss2 <- encapsulate to Bob's one-time KEM prekey               [optional]
     let (ss1, ct1) = parameters.their_signed_kem_pre_key().encapsulate(&mut csprng)?;

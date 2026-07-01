@@ -30,6 +30,7 @@ displaydoc = { workspace = true }
 hex = { workspace = true }
 hkdf = { workspace = true }
 hmac = { workspace = true }
+hqc-kem = { workspace = true, optional = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
 libcrux-ml-kem = { workspace = true, features = ["kyber", "mlkem1024"] }
@@ -46,9 +47,11 @@ uuid = { workspace = true }
 zerocopy = { workspace = true, features = ["derive"] }
 
 [features]
-# The fully post-quantum PQXDH variant relies on ML-KEM-1024 KEM prekeys, so it
-# is enabled by default in this artefact.
-default = ["mlkem1024"]
+# The fully post-quantum PQXDH variant now uses HQC-256 KEM prekeys, so the
+# `hqc256` feature is enabled by default in this artefact. `mlkem1024` is kept
+# as a non-default feature so ML-KEM can still be built for the benchmark
+# comparison.
+default = ["hqc256"]
 # Sealed Sender requires Diffie-Hellman against the identity key, which the
 # post-quantum ML-DSA identity cannot do. It is therefore opt-in and not built
 # by default.
@@ -58,6 +61,9 @@ kyber768 = ["libcrux-ml-kem/kyber", "libcrux-ml-kem/mlkem768"]
 # incompatibly until the final version of the standard is published and
 # libsignal will update to match.
 mlkem1024 = []
+# HQC-256 (code-based KEM) prekeys. Enables evaluating HQC as a drop-in
+# replacement for ML-KEM-1024 in the fully post-quantum PQXDH handshake.
+hqc256 = ["dep:hqc-kem"]
 
 [dev-dependencies]
 clap = { workspace = true, features = ["derive"] }
@@ -87,4 +93,5 @@ required-features = ["sealed_sender"]
 [[bench]]
 name = "kem"
 harness = false
-required-features = ["kyber768"]
+# HQC-256 (default) plus ML-KEM-1024 for the head-to-head comparison.
+required-features = ["mlkem1024", "hqc256"]
