@@ -22,7 +22,7 @@ HQC-256 while retaining ML-DSA-87 and the same KEM-agnostic PQXDH construction.
 
 Each release line has its own pair of branches; there is no single aggregated history:
 
-- `main-v1` — released state of the `v1.x` line (currently `v1.0.1`).
+- `main-v1` — current state of the `v1.x` line; release tags mark its published versions.
 - `main-v2` — current state of the `v2.x` line and the repository default branch; release tags
   mark its published versions.
 - `working-v1.x` and `working-v2.x` — development branches for the two lines. Release candidates
@@ -38,8 +38,10 @@ ordinary commits rather than history merges.
 From `v2.0.1` onward the project keeps exactly one project-authored Markdown file: this one. Every
 other Markdown file in the repository (`README.md`, `RELEASE_NOTES.md`, `RELEASE.md`, `TESTING.md`,
 `SECURITY.md`, `CODING_GUIDELINES.md`, and the `doc/` book) is inherited from upstream libsignal,
-and `third-party/hqc-kem/` keeps its own upstream README as part of the vendored crate. The full
-text of the retired design documents remains available in Git history up to tag `v2.0.0`.
+and `third-party/hqc-kem/` keeps its own upstream README as part of the vendored crate. The
+policy covers both release lines: the `v1.x` line's copy of `POST_QUANTUM_PQXDH.md` was retired
+the same way, and the full text of all retired documents remains available in Git history up to
+tags `v1.0.1` and `v2.0.0`.
 
 ## Imported libsignal versions
 
