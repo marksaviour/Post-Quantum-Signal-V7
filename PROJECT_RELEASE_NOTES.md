@@ -7,8 +7,8 @@ versions use Git tags and are independent of Signal's inherited package version 
 
 - Upstream libsignal snapshot: `0.73.3`.
 - Rust `libsignal-protocol` crate metadata: `0.1.0`.
-- Existing research tags: `v1.0.0` and `v2.0.0`.
-- Current release candidates: `v1.0.1` and `v2.0.1`.
+- Existing research tags: `v1.0.0`, `v1.0.1`, and `v2.0.0`.
+- Current release candidate: `v2.0.1`.
 - Signal's inherited `RELEASE_NOTES.md` remains at `0.73.3`; these project notes are the source for
   research GitHub releases.
 
@@ -79,9 +79,10 @@ created.
 
 ## v1.0.1 — Full public-API session demonstration
 
-- **Status:** Release candidate validated on 23 July 2026
+- **Released:** 28 July 2026
+- **Tag:** `v1.0.1`
+- **Commit:** `b475a92c4c1c23593c9e1e15b21668777cd06597`
 - **Base tag:** `v1.0.0`
-- **Release tag:** `v1.0.1` after approval
 
 ### Changes
 
@@ -96,14 +97,14 @@ created.
 
 ### Validation
 
+Release-candidate validation performed on 23 July 2026:
+
 - `cargo check -p libsignal-protocol --example full_session` — passed.
 - `cargo run -p libsignal-protocol --example full_session` — passed every assertion.
 - `cargo test -p libsignal-protocol` — 68 passed, 2 ignored, 0 failed.
 - `rustfmt --edition 2021 --check rust/protocol/examples/full_session.rs` — passed.
 - Example-specific Clippy passed after allowing two existing `v1.0.0` library findings:
   `large_enum_variant` in `protocol.rs` and `cast_possible_truncation` in `ratchet.rs`.
-
-The final commit identifier will be added before creating the `v1.0.1` tag.
 
 ## v1.0.0 — Fully post-quantum PQXDH baseline
 
