@@ -1,7 +1,10 @@
 # Project Release Notes
 
-This file records every release version of the Post-Quantum Signal research artefact. Project
-versions use Git tags and are independent of Signal's inherited package version metadata.
+This file is the single project-authored document for the Post-Quantum Signal research artefact.
+It records every release version and consolidates the design and evaluation material that earlier
+releases kept in separate documents (`POST_QUANTUM_PQXDH.md` and `HQC_SWAP_CHANGES.md`, both
+retired in `v2.0.1`). Project versions use Git tags and are independent of Signal's inherited
+package version metadata.
 
 ## Version and tag conventions
 
@@ -15,6 +18,31 @@ versions use Git tags and are independent of Signal's inherited package version 
 The `v1.x` line evaluates ML-KEM-1024 with ML-DSA-87. The `v2.x` line replaces ML-KEM-1024 with
 HQC-256 while retaining ML-DSA-87 and the same KEM-agnostic PQXDH construction.
 
+## Branch layout
+
+Each release line has its own pair of branches; there is no single aggregated history:
+
+- `main-v1` — current state of the `v1.x` line; release tags mark its published versions.
+- `main-v2` — current state of the `v2.x` line and the repository default branch; release tags
+  mark its published versions.
+- `working-v1.x` and `working-v2.x` — development branches for the two lines. Release candidates
+  are validated and tagged there, then merged into the corresponding `main-vN` branch.
+
+The former aggregated `main` branch interleaved the two release lines in one history, so during
+`v2.0.1` it was retired in favour of the per-line branches above. Each line's history contains
+only the shared post-quantum baseline plus its own work; improvements are ported between lines as
+ordinary commits rather than history merges.
+
+## Documentation policy
+
+From `v2.0.1` onward the project keeps exactly one project-authored Markdown file: this one. Every
+other Markdown file in the repository (`README.md`, `RELEASE_NOTES.md`, `RELEASE.md`, `TESTING.md`,
+`SECURITY.md`, `CODING_GUIDELINES.md`, and the `doc/` book) is inherited from upstream libsignal,
+and `third-party/hqc-kem/` keeps its own upstream README as part of the vendored crate. The
+policy covers both release lines: the `v1.x` line's copy of `POST_QUANTUM_PQXDH.md` was retired
+the same way, and the full text of all retired documents remains available in Git history up to
+tags `v1.0.1` and `v2.0.0`.
+
 ## Imported libsignal versions
 
 These snapshots are development baselines, not Post-Quantum Signal release tags:
@@ -26,17 +54,24 @@ These snapshots are development baselines, not Post-Quantum Signal release tags:
 
 ## v2.0.1 — Documentation and portability update
 
-- **Status:** Planned release
+- **Status:** In progress on `working-v2.x`
 - **Base tag:** `v2.0.0`
 - **Release tag:** `v2.0.1` after validation
 
-Planned changes:
+Changes applied so far:
 
-- Merge `HQC_SWAP_CHANGES.md` into `POST_QUANTUM_PQXDH.md` as the canonical Version 2 document.
-- Correct stale branch, validation, terminology, and HQC standardisation statements.
+- Restore the Unix executable modes and shared test-fixture symlinks that the Windows-authored
+  baseline snapshot had lost (the `v1.x` line shipped the same repair in `v1.0.1`).
+- Consolidate all project-authored documentation into this single file and remove
+  `HQC_SWAP_CHANGES.md` and `POST_QUANTUM_PQXDH.md`, replacing their stale branch, validation,
+  terminology, and HQC standardisation statements with the corrected technical summary below.
+- Retire the aggregated `main` branch in favour of the per-line release branches `main-v1` and
+  `main-v2` (see the branch layout above).
+
+Remaining planned changes:
+
 - Add project-specific README content while preserving the original Signal README beneath it.
 - Complete the project-authored comment audit.
-- Carry forward the executable-mode and shared-fixture symlink repair from `v1.0.1`.
 - Re-run the HQC protocol tests, examples, known-answer tests, Clippy, and KEM benchmark before
   release.
 
@@ -122,8 +157,8 @@ Release-candidate validation performed on 23 July 2026:
 - Uses signed and optional one-time ML-KEM-1024 prekeys.
 - Adds new wire and storage fields for the second KEM ciphertext and transcript signature.
 - Adds unit, handshake, session, negative-path, and serialization tests.
-- Adds the `pqxdh` runnable handshake demonstration and the initial
-  `POST_QUANTUM_PQXDH.md` design document.
+- Adds the `pqxdh` runnable handshake demonstration and the initial `POST_QUANTUM_PQXDH.md`
+  design document (retired in `v2.0.1` and consolidated into this file).
 
 ### Scope
 
@@ -131,6 +166,131 @@ Release-candidate validation performed on 23 July 2026:
 - X25519 remains as the Double Ratchet key after the handshake.
 - Sealed Sender and non-Rust language bindings are not supported by this research variant.
 - The protocol is intentionally incompatible with stock Signal clients.
+
+## Technical summary
+
+This section consolidates the retired design documents. `v1.x` refers to the ML-KEM-1024 line and
+`v2.x` to the HQC-256 line; the handshake construction is identical in both, so the comparison
+cleanly isolates the KEM.
+
+### Fully post-quantum PQXDH design (both lines)
+
+The initial PQXDH key agreement is converted from Signal's hybrid construction (X25519
+Diffie–Hellman plus a post-quantum KEM) into a fully post-quantum handshake:
+
+- The long-term identity is an ML-DSA-87 signing keypair used only to produce and verify
+  signatures; it can no longer perform Diffie–Hellman, so a harvest-now-decrypt-later adversary
+  has no DH value to break.
+- Bob publishes a bundle containing a signed X25519 ratchet key (Double Ratchet bootstrap only —
+  it contributes nothing to the secret), a mandatory signed KEM prekey, and an optional one-time
+  KEM prekey, each signed by his ML-DSA-87 identity.
+- Alice verifies every bundle signature, then encapsulates to the signed prekey (`ss1`/`ct1`) and,
+  if present, to the one-time prekey (`ss2`/`ct2`). The one-time prekey provides post-quantum
+  forward secrecy for the initial message.
+- The secret input is `0xFF*32 ‖ ss1 ‖ [ss2]`, derived through HKDF-SHA-256. There is no X25519
+  contribution to the shared secret.
+- Alice authenticates explicitly by signing the handshake transcript with her ML-DSA-87 identity.
+  The transcript length-prefixes the label, both identities, both ciphertexts, Bob's ratchet key,
+  and Alice's base key, preventing mix-and-match manipulation; Bob rejects tampering with
+  `SignatureValidationFailed`.
+- All ML-DSA operations use the context string `Signal_PQXDH_MLDSA87`.
+
+The KEM is selected at prekey-generation time, and each line uses its own domain-separation
+labels:
+
+| Line | HKDF label | Transcript label |
+| --- | --- | --- |
+| `v1.x` | `PQXDH_MLKEM1024_MLDSA87_SHA-256` | `PQXDH_MLKEM1024_MLDSA87_transcript` |
+| `v2.x` | `PQXDH_HQC256_MLDSA87_SHA-256` | `PQXDH_HQC256_MLDSA87_transcript` |
+
+### Primitives
+
+| Primitive | Role | Library | Type tag | Sizes (bytes) |
+| --- | --- | --- | --- | --- |
+| ML-DSA-87 (FIPS 204) | Identity / signatures | `libcrux-ml-dsa` 0.0.8 | `0x09` | pk 2592, sk 4896, sig 4627 |
+| HQC-256 | KEM prekeys (`v2.x` default) | vendored `hqc-kem` | `0x0B` | pk 7237, sk 7333, ct 14421, ss 32 |
+| ML-KEM-1024 (FIPS 203) | KEM prekeys (`v1.x`); benchmark baseline in `v2.x` | `libcrux-ml-kem` 0.0.2 | `0x0A` | pk 1568, sk 3168, ct 1568, ss 32 |
+| X25519 | Double Ratchet ratchet key only | `curve25519-dalek` | `0x05` | pk 32 |
+| HKDF-SHA-256 | Root/chain key derivation | `hkdf` / `sha2` | — | 64-byte output |
+
+ML-DSA-87, ML-KEM-1024, and HQC-256 all sit at NIST security level 5.
+
+### Wire and storage additions
+
+`PreKeySignalMessage` (`wire.proto`) gains `pq_one_time_pre_key_id (9)`,
+`pq_one_time_ciphertext (10)`, and `identity_signature (11)`. `PendingKyberPreKey`
+(`storage.proto`) gains `pq_one_time_pre_key_id (3)`, `pq_one_time_ciphertext (4)`, and
+`identity_signature (5)` so the same authenticator and ciphertexts are re-sent on every
+`PreKeySignalMessage` until Bob acknowledges the session.
+
+### v2.x HQC-256 integration specifics
+
+- `rust/protocol/src/kem/hqc256.rs` implements the existing `kem::Parameters` trait over the
+  pure-Rust `hqc-kem` crate, so HQC-256 plugs into the generic KEM API with no handshake changes.
+- `hqc-kem` builds against `rand` 0.10 while libsignal uses `rand` 0.9, and the two `CryptoRng`
+  traits are incompatible. The wrapper therefore draws the keygen seed and the encapsulation
+  message and salt from the caller's CSPRNG and calls HQC's deterministic entry points, keeping
+  all randomness caller-sourced.
+- The crate is vendored at `third-party/hqc-kem/` because the upstream `from_bytes!` macro had an
+  inverted byte-length check that rejected correct lengths and accepted wrong ones, breaking key
+  and ciphertext reconstruction from stored bytes; the vendored copy fixes the comparison.
+  Research finding: the pure-Rust HQC ecosystem is markedly less mature than ML-KEM's formally
+  verified libcrux implementation.
+- Cargo features: `hqc256` is the default on the `v2.x` line, and `mlkem1024` is retained as a
+  non-default, benchmark-only feature.
+
+### Measured KEM comparison (recorded for v2.0.0)
+
+Sizes in bytes:
+
+| Quantity | ML-KEM-1024 | HQC-256 | HQC ÷ ML-KEM |
+| --- | --- | --- | --- |
+| Public key | 1568 | 7237 | ≈ 4.6× |
+| Secret key | 3168 | 7333 | ≈ 2.3× |
+| Ciphertext | 1568 | 14421 | ≈ 9.2× |
+| Shared secret | 32 | 32 | 1× |
+
+Criterion medians from the `kem` benchmark (optimised build):
+
+| Operation | ML-KEM-1024 | HQC-256 | HQC ÷ ML-KEM |
+| --- | --- | --- | --- |
+| `generate` | ~15.1 µs | ~692 µs | ~46× |
+| `encapsulate` | ~12.2 µs | ~1.38 ms | ~114× |
+| `decapsulate` | ~24.9 µs | ~3.53 ms | ~142× |
+
+Per handshake, the two KEM ciphertexts in a `PreKeySignalMessage` grow from roughly 3.1 KB with
+ML-KEM to roughly 28.8 KB with HQC, and the two bundle public keys from roughly 3.1 KB to roughly
+14.5 KB. Kyber1024 tracks ML-KEM-1024 closely in the same benchmark, confirming the lattice
+baseline.
+
+Conclusion: for a bandwidth- and latency-sensitive messenger, ML-KEM-1024 is the decisively more
+efficient level-5 choice, so Signal's selection is well justified on engineering grounds. HQC-256's
+value is algorithmic diversity on a code-based hardness assumption — NIST selected it in March
+2025 as the backup to ML-KEM, with standardisation as FIPS 207 in progress — which suits it to a
+fallback or hybrid role rather than a drop-in replacement.
+
+### Scope and caveats (all releases)
+
+- The Double Ratchet that runs after the handshake still uses X25519, so these releases deliver a
+  fully post-quantum handshake, not a fully post-quantum session.
+- Sealed Sender performs Diffie–Hellman against the identity key, which a signing-only ML-DSA
+  identity cannot do; it is gated behind the off-by-default `sealed_sender` feature.
+- Only the Rust `libsignal-protocol` crate is updated. The Java, Swift, and Node bridges still
+  assume Curve25519 identities, so always scope builds with `-p libsignal-protocol`.
+- The wire format is intentionally incompatible with stock Signal clients.
+
+### Build, test, and demonstration commands
+
+```bash
+cargo build -p libsignal-protocol
+cargo test  -p libsignal-protocol
+cargo run   -p libsignal-protocol --example pqxdh          # handshake demonstration
+cargo run   -p libsignal-protocol --example full_session   # full public-API session flow
+cargo bench -p libsignal-protocol --features "hqc256 mlkem1024" --bench kem
+```
+
+Building requires a C/C++ linker toolchain and `protoc`, which `rust/protocol/build.rs` uses to
+compile the wire and storage protobuf definitions.
 
 ## Shared release notice
 
