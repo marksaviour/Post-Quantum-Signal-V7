@@ -1,10 +1,11 @@
 # Project Release Notes
 
-This file is the single project-authored document for the Post-Quantum Signal research artefact.
-It records every release version and consolidates the design and evaluation material that earlier
-releases kept in separate documents (`POST_QUANTUM_PQXDH.md` and `HQC_SWAP_CHANGES.md`, both
-retired in `v2.0.1`). Project versions use Git tags and are independent of Signal's inherited
-package version metadata.
+This file is the single project-authored document for the `v2.x` (HQC-256 + ML-DSA-87) line of
+the Post-Quantum Signal research artefact. Each release line carries its own copy of these notes,
+scoped to that line's releases; this copy records the `v2.x` releases and consolidates the design
+and evaluation material that earlier releases kept in separate documents (`POST_QUANTUM_PQXDH.md`
+and `HQC_SWAP_CHANGES.md`, both retired in `v2.0.1`). Project versions use Git tags and are
+independent of Signal's inherited package version metadata.
 
 ## Version and tag conventions
 
@@ -14,9 +15,11 @@ package version metadata.
 - Current release candidate: `v2.0.1`.
 - Signal's inherited `RELEASE_NOTES.md` remains at `0.73.3`; these project notes are the source for
   research GitHub releases.
+- Each line's copy of these notes documents that line's releases.
 
 The `v1.x` line evaluates ML-KEM-1024 with ML-DSA-87. The `v2.x` line replaces ML-KEM-1024 with
-HQC-256 while retaining ML-DSA-87 and the same KEM-agnostic PQXDH construction.
+HQC-256 while retaining ML-DSA-87 and the same KEM-agnostic PQXDH construction. The `v1.x`
+releases are documented in the `v1.x` line's copy of these notes.
 
 ## Branch layout
 
@@ -35,13 +38,13 @@ ordinary commits rather than history merges.
 
 ## Documentation policy
 
-From `v2.0.1` onward the project keeps exactly one project-authored Markdown file: this one. Every
-other Markdown file in the repository (`README.md`, `RELEASE_NOTES.md`, `RELEASE.md`, `TESTING.md`,
-`SECURITY.md`, `CODING_GUIDELINES.md`, and the `doc/` book) is inherited from upstream libsignal,
-and `third-party/hqc-kem/` keeps its own upstream README as part of the vendored crate. The
-policy covers both release lines: the `v1.x` line's copy of `POST_QUANTUM_PQXDH.md` was retired
-the same way, and the full text of all retired documents remains available in Git history up to
-tags `v1.0.1` and `v2.0.0`.
+From `v2.0.1` onward each release line keeps exactly one project-authored Markdown file: its own
+copy of these notes. Every other Markdown file in the repository (`README.md`, `RELEASE_NOTES.md`,
+`RELEASE.md`, `TESTING.md`, `SECURITY.md`, `CODING_GUIDELINES.md`, and the `doc/` book) is
+inherited from upstream libsignal, and `third-party/hqc-kem/` keeps its own upstream README as
+part of the vendored crate. The `v1.x` line's `POST_QUANTUM_PQXDH.md` was retired the same way,
+and the full text of all retired documents remains available in Git history up to tags `v1.0.1`
+and `v2.0.0`.
 
 ## Imported libsignal versions
 
@@ -112,60 +115,12 @@ created.
   scope.
 - This tag contains the inherited Windows metadata loss repaired by the planned `v2.0.1` release.
 
-## v1.0.1 — Full public-API session demonstration
+## v1.x line releases
 
-- **Released:** 28 July 2026
-- **Tag:** `v1.0.1`
-- **Commit:** `b475a92c4c1c23593c9e1e15b21668777cd06597`
-- **Base tag:** `v1.0.0`
-
-### Changes
-
-- Adds `rust/protocol/examples/full_session.rs`, a runnable end-to-end demonstration using the
-  public protocol API and in-memory stores.
-- Exercises the ML-KEM-1024 + ML-DSA-87 initial handshake, serialized wire transport, Bob's
-  matching session, a reply, ordered Double Ratchet messages, and out-of-order delivery.
-- Describes the scope accurately: the initial handshake is fully post-quantum, while the ongoing
-  Double Ratchet still uses X25519.
-- Restores 21 Unix executable modes and 12 shared test-fixture symlinks unintentionally lost from
-  the Windows-authored `v1.0.0` snapshot.
-
-### Validation
-
-Release-candidate validation performed on 23 July 2026:
-
-- `cargo check -p libsignal-protocol --example full_session` — passed.
-- `cargo run -p libsignal-protocol --example full_session` — passed every assertion.
-- `cargo test -p libsignal-protocol` — 68 passed, 2 ignored, 0 failed.
-- `rustfmt --edition 2021 --check rust/protocol/examples/full_session.rs` — passed.
-- Example-specific Clippy passed after allowing two existing `v1.0.0` library findings:
-  `large_enum_variant` in `protocol.rs` and `cast_possible_truncation` in `ratchet.rs`.
-
-## v1.0.0 — Fully post-quantum PQXDH baseline
-
-- **Released:** 27 June 2026
-- **Tag:** `v1.0.0`
-- **Commit:** `f55ae91d9bb9d9412763adf7aa5b67e345cba7e1`
-- **Upstream base:** libsignal `0.73.3`
-
-### Changes
-
-- Converts the initial PQXDH handshake from a hybrid X25519/KEM design to a KEM-only shared
-  secret using ML-KEM-1024.
-- Replaces Curve25519 identity authentication with ML-DSA-87 signatures.
-- Adds explicit ML-DSA authentication for Alice through a signed handshake transcript.
-- Uses signed and optional one-time ML-KEM-1024 prekeys.
-- Adds new wire and storage fields for the second KEM ciphertext and transcript signature.
-- Adds unit, handshake, session, negative-path, and serialization tests.
-- Adds the `pqxdh` runnable handshake demonstration and the initial `POST_QUANTUM_PQXDH.md`
-  design document (retired in `v2.0.1` and consolidated into this file).
-
-### Scope
-
-- The initial shared secret contains no X25519 contribution.
-- X25519 remains as the Double Ratchet key after the handshake.
-- Sealed Sender and non-Rust language bindings are not supported by this research variant.
-- The protocol is intentionally incompatible with stock Signal clients.
+This line builds on the fully post-quantum PQXDH baseline released as `v1.0.0` (commit
+`f55ae91d9bb9d9412763adf7aa5b67e345cba7e1`), which is also this line's base tag. The `v1.x`
+releases — the `v1.0.0` baseline and the `v1.0.1` session demonstration — are documented in the
+`v1.x` line's copy of these notes on `main-v1` and `working-v1.x`.
 
 ## Technical summary
 
