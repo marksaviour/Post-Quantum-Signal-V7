@@ -23,8 +23,8 @@ HQC-256 while retaining ML-DSA-87 and the same KEM-agnostic PQXDH construction.
 Each release line has its own pair of branches; there is no single aggregated history:
 
 - `main-v1` — released state of the `v1.x` line (currently `v1.0.1`).
-- `main-v2` — released state of the `v2.x` line and the repository default branch (currently
-  `v2.0.0`).
+- `main-v2` — current state of the `v2.x` line and the repository default branch; release tags
+  mark its published versions.
 - `working-v1.x` and `working-v2.x` — development branches for the two lines. Release candidates
   are validated and tagged there, then merged into the corresponding `main-vN` branch.
 
