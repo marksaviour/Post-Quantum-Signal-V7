@@ -1,3 +1,8 @@
+<!--
+Copyright 2026 Mark Saviour Farrugia.
+SPDX-License-Identifier: AGPL-3.0-only
+-->
+
 # Project Release Notes
 
 This file is the single project-authored document for the `v2.x` (HQC-256 + ML-DSA-87) line of
@@ -70,13 +75,31 @@ Changes applied so far:
   terminology, and HQC standardisation statements with the corrected technical summary below.
 - Retire the aggregated `main` branch in favour of the per-line release branches `main-v1` and
   `main-v2` (see the branch layout above).
+- Record project authorship across the artefact. Every file carrying project-authored work now
+  names Mark Saviour Farrugia as a copyright holder: the protocol source, tests, benchmarks,
+  examples, protobuf definitions, crate manifest, and these notes. Files inherited from upstream
+  libsignal retain Signal Messenger's notice with the project author's added beneath it, as
+  AGPL-3.0 section 4 requires. Sole attribution appears only on files written for this project
+  (`src/dsa.rs`, `examples/pqxdh.rs`, `examples/full_session.rs`, `examples/sizes.rs`,
+  `benches/mldsa.rs`). Every such change is comment-only and alters no executable line.
+- Add the measurement harness for the evaluation chapter, and correct a defect in the existing KEM
+  benchmark that had invalidated every recorded decapsulation figure (see the correction under the
+  measured comparison below). New instruments: `benches/mldsa.rs` for ML-DSA-87 key generation,
+  signing, and verification; initiator and responder handshake spans in both KEM modes in
+  `benches/session.rs`; `examples/sizes.rs` for deterministic serialised-size capture; and
+  type-prefixed length columns in the `kem` benchmark's size table. This work leaves
+  `rust/protocol/src/` untouched.
 
 Remaining planned changes:
 
 - Add project-specific README content while preserving the original Signal README beneath it.
-- Complete the project-authored comment audit.
+- Complete the project-authored comment audit. Copyright attribution is done; what remains is the
+  prose audit of inherited comments that still describe ML-KEM-1024 where the `v2.x` line uses
+  HQC-256, for example in `src/state/bundle.rs`, `src/dsa.rs`, and the `tests/session.rs` header.
 - Re-run the HQC protocol tests, examples, known-answer tests, Clippy, and KEM benchmark before
   release.
+- Port the measurement harness to the `v1.x` line with identical benchmark span names, then record
+  the five-block measurement campaign on both reference machines.
 
 This section will be updated with final commit and validation details before the `v2.0.1` tag is
 created.
@@ -103,7 +126,9 @@ created.
 - HQC-256 public keys are approximately 4.6 times larger than ML-KEM-1024 public keys.
 - HQC-256 ciphertexts are approximately 9.2 times larger.
 - The recorded Rust implementation was approximately 46–142 times slower across key generation,
-  encapsulation, and decapsulation.
+  encapsulation, and decapsulation. **Partly superseded in `v2.0.1`:** the decapsulation end of
+  this range came from a defective benchmark fixture. See the correction under the measured
+  comparison below.
 - HQC provides code-based algorithmic diversity, but ML-KEM remains the more practical default for
   a bandwidth- and latency-sensitive messenger.
 
@@ -213,6 +238,36 @@ Criterion medians from the `kem` benchmark (optimised build):
 | `encapsulate` | ~12.2 µs | ~1.38 ms | ~114× |
 | `decapsulate` | ~24.9 µs | ~3.53 ms | ~142× |
 
+#### Correction to the decapsulation figures (`v2.0.1`)
+
+The `decapsulate` row above is wrong, and wrong for both KEMs. The benchmark built its fixtures by
+cycling a lazy `Iterator::map` chain; because `cycle` restarts the underlying iterator, the
+encapsulation inside that closure re-ran on every iteration *inside* the timed region. Every
+recorded decapsulation figure was therefore an encapsulation plus a decapsulation. The failure was
+silent because the inflated numbers looked plausible.
+
+Materialising the fixtures before the timed region reduced the measured HQC-256 decapsulation by
+41.7%, Criterion reporting the change as `[-42.251% -41.715% -41.135%]` at p = 0.00. Re-measured
+after the fix, on a different machine from the original figures:
+
+| Operation | ML-KEM-1024 | HQC-256 | HQC ÷ ML-KEM |
+| --- | --- | --- | --- |
+| `generate` | 15.384 µs | 702.07 µs | ≈ 46× |
+| `encapsulate` | 12.464 µs | 1.5286 ms | ≈ 123× |
+| `decapsulate` | 13.075 µs | 2.1977 ms | ≈ 168× |
+
+Subtracting each KEM's own encapsulation cost from its original decapsulation figure recovers the
+corrected value in both cases: 24.9 − 12.2 ≈ 12.7 µs against 13.075 µs measured, and
+3.53 − 1.38 = 2.15 ms against 2.1977 ms measured. That arithmetic confirms the diagnosis, and
+confirms the defect scaled with each KEM's own encapsulation cost rather than being specific to
+HQC-256. The `generate` and `encapsulate` rows were never affected; their fixtures were already
+materialised.
+
+Note that the corrected decapsulation ratio is *higher*, not lower. Removing a shared additive cost
+from both sides widens the multiple, because the cost removed was a larger fraction of ML-KEM's
+figure (49%) than of HQC's (39%). The qualitative conclusion below is unchanged, and slightly
+strengthened.
+
 Per handshake, the two KEM ciphertexts in a `PreKeySignalMessage` grow from roughly 3.1 KB with
 ML-KEM to roughly 28.8 KB with HQC, and the two bundle public keys from roughly 3.1 KB to roughly
 14.5 KB. Kyber1024 tracks ML-KEM-1024 closely in the same benchmark, confirming the lattice
@@ -239,16 +294,39 @@ fallback or hybrid role rather than a drop-in replacement.
 ```bash
 cargo build -p libsignal-protocol
 cargo test  -p libsignal-protocol
-cargo run   -p libsignal-protocol --example pqxdh          # handshake demonstration
-cargo run   -p libsignal-protocol --example full_session   # full public-API session flow
+cargo test  --manifest-path third-party/hqc-kem/Cargo.toml  # vendored HQC known-answer tests
+cargo run   -p libsignal-protocol --example pqxdh           # handshake demonstration
+cargo run   -p libsignal-protocol --example full_session    # full public-API session flow
+cargo run   --release -p libsignal-protocol --example sizes # deterministic size capture
 cargo bench -p libsignal-protocol --features "hqc256 mlkem1024" --bench kem
+cargo bench -p libsignal-protocol --bench mldsa
+cargo bench -p libsignal-protocol --bench session
 ```
 
 Building requires a C/C++ linker toolchain and `protoc`, which `rust/protocol/build.rs` uses to
 compile the wire and storage protobuf definitions.
+
+Measurement methodology lives in `evidence/`: the run schedule and its rotation order, the block
+runner that executes one block and logs every invocation, and one environment manifest per machine.
+Measurement output is deliberately not committed; reported figures appear in the dissertation, and a
+third party is expected to regenerate their own using the tracked instruments. See
+`evidence/README.md`.
 
 ## Shared release notice
 
 All `v1.x` and `v2.x` releases are unofficial research artefacts. They are not affiliated with,
 endorsed by, or supported by Signal, and they have not received a production cryptographic
 security audit.
+
+## Authorship and modification notice
+
+This repository is a modified version of Signal's libsignal, forked from upstream snapshot `0.73.3`
+(commit `26ff061ede6512736a7c51d7bd617673ed031791`, adopted 17 June 2026) and modified thereafter.
+Project-authored modifications are copyright 2026 Mark Saviour Farrugia and are released under the
+same licence as the original work, AGPL-3.0-only, whose full text is in `LICENSE`.
+
+Signal Messenger, LLC remains a copyright holder of all inherited work, and its notices are retained
+in every file it authored. Files bearing only the project author's notice were written for this
+project and contain no upstream code. The modifications are confined to the Rust
+`libsignal-protocol` crate, the vendored `third-party/hqc-kem/` crate, the measurement instruments,
+and these notes; the Java, Swift, and Node bridges are unmodified from upstream.
