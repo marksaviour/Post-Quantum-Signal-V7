@@ -95,3 +95,7 @@ name = "kem"
 harness = false
 # HQC-256 (default) plus ML-KEM-1024 for the head-to-head comparison.
 required-features = ["mlkem1024", "hqc256"]
+
+[[bench]]
+name = "mldsa"
+harness = false
