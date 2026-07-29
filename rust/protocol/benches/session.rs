@@ -264,6 +264,175 @@ pub fn session_encrypt_decrypt_result(c: &mut Criterion) -> Result<(), SignalPro
     Ok(())
 }
 
+/// Initiator span: begins by processing the responder's bundle and ends once the initial
+/// `PreKeySignalMessage` has been serialised. `PreKeySignalMessage::new` serialises eagerly into
+/// its `serialized` field, so serialisation is already accounted for when `support::encrypt`
+/// returns.
+///
+/// Measured in both KEM modes: with a one-time KEM prekey alongside the signed last-resort one,
+/// and with the last-resort prekey alone.
+pub fn session_initiate_result(c: &mut Criterion) -> Result<(), SignalProtocolError> {
+    let mut csprng = OsRng.unwrap_err();
+    let bob_address = ProtocolAddress::new("+14158888888".to_owned(), 1.into());
+
+    // Fixtures: built once, outside every timed region.
+    let mut bob_store = support::TestStoreBuilder::new().store;
+    let bob_bundle_full = support::create_pre_key_bundle(&mut bob_store, &mut csprng)
+        .now_or_never()
+        .expect("sync")?;
+
+    // A builder with exactly one kyber prekey yields a bundle without a one-time KEM prekey.
+    let bob_last_resort_builder = support::TestStoreBuilder::new()
+        .with_signed_pre_key(22.into())
+        .with_kyber_pre_key(8000.into());
+    let bob_bundle_last_resort = bob_last_resort_builder.make_bundle_with_latest_keys(1.into());
+    assert!(
+        bob_bundle_last_resort.one_time_kyber_pre_key_id()?.is_none(),
+        "expected no one-time KEM prekey in the last-resort-only bundle"
+    );
+
+    let alice_store = support::test_in_memory_protocol_store()?;
+
+    c.bench_function("initiate session and encrypt first message", |b| {
+        b.iter(|| {
+            let mut alice_store = alice_store.clone();
+            process_prekey_bundle(
+                &bob_address,
+                &mut alice_store.session_store,
+                &mut alice_store.identity_store,
+                &bob_bundle_full,
+                SystemTime::now(),
+                &mut OsRng.unwrap_err(),
+            )
+            .now_or_never()
+            .expect("sync")
+            .expect("valid bundle");
+            support::encrypt(&mut alice_store, &bob_address, "a short message")
+                .now_or_never()
+                .expect("sync")
+                .expect("success");
+        })
+    });
+
+    c.bench_function(
+        "initiate session and encrypt first message, last-resort only",
+        |b| {
+            b.iter(|| {
+                let mut alice_store = alice_store.clone();
+                process_prekey_bundle(
+                    &bob_address,
+                    &mut alice_store.session_store,
+                    &mut alice_store.identity_store,
+                    &bob_bundle_last_resort,
+                    SystemTime::now(),
+                    &mut OsRng.unwrap_err(),
+                )
+                .now_or_never()
+                .expect("sync")
+                .expect("valid bundle");
+                support::encrypt(&mut alice_store, &bob_address, "a short message")
+                    .now_or_never()
+                    .expect("sync")
+                    .expect("success");
+            })
+        },
+    );
+
+    Ok(())
+}
+
+/// Responder span: decrypting a genuine initial `PreKeySignalMessage`, which is the side that
+/// performs the KEM decapsulation and derives the session.
+///
+/// Both spans build their session through `process_prekey_bundle`, which is what causes
+/// `message_encrypt` to emit a `PreKeySignalMessage` rather than a `Whisper`. The pre-existing
+/// `session decrypt first message` span does not do this, so it is not a full-mode counterpart to
+/// these; see the note in the harness report.
+pub fn session_decrypt_first_message_modes_result(
+    c: &mut Criterion,
+) -> Result<(), SignalProtocolError> {
+    let mut csprng = OsRng.unwrap_err();
+    let alice_address = ProtocolAddress::new("+14159999999".to_owned(), 1.into());
+    let bob_address = ProtocolAddress::new("+14158888888".to_owned(), 1.into());
+
+    // Full mode: signed last-resort plus one-time KEM prekey.
+    let mut bob_store_full = support::TestStoreBuilder::new().store;
+    let bob_bundle_full = support::create_pre_key_bundle(&mut bob_store_full, &mut csprng)
+        .now_or_never()
+        .expect("sync")?;
+
+    let mut alice_store = support::test_in_memory_protocol_store()?;
+    process_prekey_bundle(
+        &bob_address,
+        &mut alice_store.session_store,
+        &mut alice_store.identity_store,
+        &bob_bundle_full,
+        SystemTime::now(),
+        &mut csprng,
+    )
+    .now_or_never()
+    .expect("sync")?;
+    let full_mode_message = support::encrypt(&mut alice_store, &bob_address, "a short message")
+        .now_or_never()
+        .expect("sync")?;
+    assert_eq!(
+        full_mode_message.message_type(),
+        CiphertextMessageType::PreKey
+    );
+
+    c.bench_function("session decrypt first message, full mode", |b| {
+        b.iter(|| {
+            let mut bob_store = bob_store_full.clone();
+            support::decrypt(&mut bob_store, &alice_address, &full_mode_message)
+                .now_or_never()
+                .expect("sync")
+                .expect("success");
+        })
+    });
+
+    // Last-resort-only mode, via the builder pattern.
+    let bob_last_resort_builder = support::TestStoreBuilder::new()
+        .with_signed_pre_key(22.into())
+        .with_kyber_pre_key(8000.into());
+    let bob_bundle_last_resort = bob_last_resort_builder.make_bundle_with_latest_keys(1.into());
+    assert!(
+        bob_bundle_last_resort.one_time_kyber_pre_key_id()?.is_none(),
+        "expected no one-time KEM prekey in the last-resort-only bundle"
+    );
+    let bob_store_last_resort = bob_last_resort_builder.store;
+
+    let mut alice_store = support::test_in_memory_protocol_store()?;
+    process_prekey_bundle(
+        &bob_address,
+        &mut alice_store.session_store,
+        &mut alice_store.identity_store,
+        &bob_bundle_last_resort,
+        SystemTime::now(),
+        &mut csprng,
+    )
+    .now_or_never()
+    .expect("sync")?;
+    let last_resort_message = support::encrypt(&mut alice_store, &bob_address, "a short message")
+        .now_or_never()
+        .expect("sync")?;
+    assert_eq!(
+        last_resort_message.message_type(),
+        CiphertextMessageType::PreKey
+    );
+
+    c.bench_function("session decrypt first message, last-resort only", |b| {
+        b.iter(|| {
+            let mut bob_store = bob_store_last_resort.clone();
+            support::decrypt(&mut bob_store, &alice_address, &last_resort_message)
+                .now_or_never()
+                .expect("sync")
+                .expect("success");
+        })
+    });
+
+    Ok(())
+}
+
 pub fn session_encrypt(c: &mut Criterion) {
     session_encrypt_result(c).expect("success");
 }
@@ -272,6 +441,20 @@ pub fn session_encrypt_decrypt(c: &mut Criterion) {
     session_encrypt_decrypt_result(c).expect("success");
 }
 
-criterion_group!(benches, session_encrypt, session_encrypt_decrypt);
+pub fn session_initiate(c: &mut Criterion) {
+    session_initiate_result(c).expect("no errors");
+}
+
+pub fn session_decrypt_first_message_modes(c: &mut Criterion) {
+    session_decrypt_first_message_modes_result(c).expect("no errors");
+}
+
+criterion_group!(
+    benches,
+    session_encrypt,
+    session_encrypt_decrypt,
+    session_initiate,
+    session_decrypt_first_message_modes
+);
 
 criterion_main!(benches);
