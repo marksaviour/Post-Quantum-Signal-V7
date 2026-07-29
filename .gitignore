@@ -51,6 +51,12 @@ __pycache__
 /evidence/manifests/*
 !/evidence/manifests/.gitkeep
 
+# Harness diff and equivalence checks are run output. Where such a check changes
+# what may be reported, the conclusion is recorded in PROJECT_RELEASE_NOTES.md
+# instead.
+/evidence/harness-diffs/*
+!/evidence/harness-diffs/.gitkeep
+
 # Byproduct of running the vendored crate's tests standalone; outside the
 # harness scope.
 /third-party/hqc-kem/Cargo.lock
