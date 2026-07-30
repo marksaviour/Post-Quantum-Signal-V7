@@ -22,14 +22,15 @@ qualifies.
 
 | Tracked | Ignored |
 | --- | --- |
-| `README.md`, `schedule/run-schedule.md`, `schedule/run-block.ps1` | `criterion/`, `sizes/`, `manifests/`, `harness-diffs/`, `correctness-gate-*.md` |
+| `README.md`, `schedule/run-schedule.md`, `schedule/run-block.ps1`, `harness-diffs/` | `criterion/`, `sizes/`, `manifests/`, `correctness-gate-*.md` |
 
-Only the archive's description and its instruments are tracked. Environment
-manifests are ignored because they identify a specific machine and are reproduced
-in the dissertation. Harness diff checks are ignored because they are run output;
-where such a check changes what may be reported, the conclusion is recorded in
-`PROJECT_RELEASE_NOTES.md` instead, as happened with the decapsulation fixture
-defect found during `v2.0.1`.
+Only the archive's description, its instruments, and the harness diffs are
+tracked. Environment manifests are ignored because they identify a specific
+machine and are reproduced in the dissertation. Harness diffs are tracked,
+because Chapter 4 admits a harness commit only on the archived evidence that it
+leaves protocol code unchanged; where such a check changes what may be reported,
+the conclusion is also recorded in `PROJECT_RELEASE_NOTES.md`, as happened with
+the decapsulation fixture defect found during `v2.0.1`.
 
 The `.gitkeep` entries are retained so the output directories exist before the
 runs. `schedule/run-block.ps1` recreates `criterion/` if it is missing.

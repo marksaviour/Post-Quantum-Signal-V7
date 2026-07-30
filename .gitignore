@@ -51,11 +51,9 @@ __pycache__
 /evidence/manifests/*
 !/evidence/manifests/.gitkeep
 
-# Harness diff and equivalence checks are run output. Where such a check changes
-# what may be reported, the conclusion is recorded in PROJECT_RELEASE_NOTES.md
-# instead.
-/evidence/harness-diffs/*
-!/evidence/harness-diffs/.gitkeep
+# Harness diff and equivalence checks are deliberately not ignored. Chapter 4
+# admits a harness commit only on the archived evidence that it leaves protocol
+# code unchanged, so /evidence/harness-diffs/ is tracked.
 
 # Byproduct of running the vendored crate's tests standalone; outside the
 # harness scope.

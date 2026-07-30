@@ -29,7 +29,7 @@ wall-clock cost only, not the measurements.
 
 ## Cells
 
-Twenty-three cells per machine. Primitive cells are properties of the algorithms
+Thirty cells per machine. Primitive cells are properties of the algorithms
 rather than of an artefact, so they are measured once per machine from the `v2`
 tree with both KEM features enabled, which is the only configuration that builds
 all three KEMs together.
@@ -50,6 +50,19 @@ all three KEMs together.
 | P10 | `mldsa` | `MLDSA87_generate` |
 | P11 | `mldsa` | `MLDSA87_sign` |
 | P12 | `mldsa` | `MLDSA87_verify` |
+
+### Classical primitives, baseline harness tree
+
+The baseline's classical components, measured as individual operations. Unlike
+the post-quantum primitive cells, these belong to one artefact only, so they run
+from the baseline harness tree rather than the common `v2` tree.
+
+| Id | Target | Case |
+| --- | --- | --- |
+| C1 | `classical` | `X25519_generate` |
+| C2 | `classical` | `X25519_agree` |
+| C3 | `classical` | `XEdDSA_sign` |
+| C4 | `classical` | `XEdDSA_verify` |
 
 ### Handshake, `v2` tree (HQC-256 default), target `session`
 
@@ -84,47 +97,61 @@ prekey. They are named so as not to imply otherwise.
 | B2 | `baseline initiate session and encrypt first message, no one-time curve key` |
 | B3 | `baseline decrypt first message` |
 
+### Integrated exchange
+
+One case per artefact: bundle processing through initiator decryption of the
+responder's first reply, session confirmed in both directions. One mode only: the
+versions with signed plus one-time KEM pre-keys, the baseline with its optional
+one-time curve pre-key present. The baseline case is named apart for the same
+reason as its handshake cases.
+
+| Id | Tree | Target | Case |
+| --- | --- | --- | --- |
+| I1 | `v1` | `session` | `session establishment and first exchange` |
+| I2 | `v2` | `session` | `session establishment and first exchange` |
+| IB | `baseline-bench` | `baseline_pqxdh` | `baseline session establishment and first exchange` |
+
 ## Canonical order
 
 ```
-P01 P02 P03 P04 P05 P06 P07 P08 P09 P10 P11 P12 H2a H2b H2c H2d H1a H1b H1c H1d B1 B2 B3
+P01 P02 P03 P04 P05 P06 P07 P08 P09 P10 P11 P12 C1 C2 C3 C4 H2a H2b H2c H2d H1a H1b H1c H1d B1 B2 B3 I1 I2 IB
 ```
 
 ## Rotation rule
 
 Block `b` for `b` in 1..5 is the canonical order rotated left by `5 * (b - 1)`
-positions, wrapping at 23. Every block therefore contains all 23 cells exactly
+positions, wrapping at 30. Every block therefore contains all 30 cells exactly
 once, and each cell occupies five well-separated positions across the campaign,
 so no cell is systematically measured first or last.
 
 ### Block 1, rotate left 0
 
 ```
-P01 P02 P03 P04 P05 P06 P07 P08 P09 P10 P11 P12 H2a H2b H2c H2d H1a H1b H1c H1d B1 B2 B3
+P01 P02 P03 P04 P05 P06 P07 P08 P09 P10 P11 P12 C1 C2 C3 C4 H2a H2b H2c H2d H1a H1b H1c H1d B1 B2 B3 I1 I2 IB
 ```
 
 ### Block 2, rotate left 5
 
 ```
-P06 P07 P08 P09 P10 P11 P12 H2a H2b H2c H2d H1a H1b H1c H1d B1 B2 B3 P01 P02 P03 P04 P05
+P06 P07 P08 P09 P10 P11 P12 C1 C2 C3 C4 H2a H2b H2c H2d H1a H1b H1c H1d B1 B2 B3 I1 I2 IB P01 P02 P03 P04 P05
 ```
 
 ### Block 3, rotate left 10
 
 ```
-P11 P12 H2a H2b H2c H2d H1a H1b H1c H1d B1 B2 B3 P01 P02 P03 P04 P05 P06 P07 P08 P09 P10
+P11 P12 C1 C2 C3 C4 H2a H2b H2c H2d H1a H1b H1c H1d B1 B2 B3 I1 I2 IB P01 P02 P03 P04 P05 P06 P07 P08 P09 P10
 ```
 
 ### Block 4, rotate left 15
 
 ```
-H2d H1a H1b H1c H1d B1 B2 B3 P01 P02 P03 P04 P05 P06 P07 P08 P09 P10 P11 P12 H2a H2b H2c
+C4 H2a H2b H2c H2d H1a H1b H1c H1d B1 B2 B3 I1 I2 IB P01 P02 P03 P04 P05 P06 P07 P08 P09 P10 P11 P12 C1 C2 C3
 ```
 
 ### Block 5, rotate left 20
 
 ```
-B2 B3 P01 P02 P03 P04 P05 P06 P07 P08 P09 P10 P11 P12 H2a H2b H2c H2d H1a H1b H1c H1d B1
+H1a H1b H1c H1d B1 B2 B3 I1 I2 IB P01 P02 P03 P04 P05 P06 P07 P08 P09 P10 P11 P12 C1 C2 C3 C4 H2a H2b H2c H2d
 ```
 
 ## What is recorded per invocation

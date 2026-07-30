@@ -16,20 +16,28 @@
 #   ./evidence/schedule/run-block.ps1 -Block 1 -Artefact v2
 #
 # -Artefact selects which cells are applicable to the tree currently checked
-# out. Positions are numbered against the full 23-cell rotation, so they stay
+# out. Positions are numbered against the full 30-cell rotation, so they stay
 # comparable when a block is executed in per-artefact passes.
+#
+# -RepoRoot runs the block against a tree other than the one holding this
+# script, which is how the v1 and baseline worktrees are measured.
 
 param(
     [ValidateRange(1, 5)][int]$Block = 1,
     [ValidateSet('v1', 'v2', 'baseline', 'all')][string]$Artefact = 'v2',
-    [string]$Machine = $env:COMPUTERNAME
+    [string]$Machine = $env:COMPUTERNAME,
+    [string]$RepoRoot = ''
 )
 
 # Cargo writes progress to stderr, which PowerShell would treat as a terminating
 # error under 'Stop'. Exit codes are checked explicitly instead.
 $ErrorActionPreference = 'Continue'
 
-$repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
+$repoRoot = if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
+    Resolve-Path (Join-Path $PSScriptRoot '..\..')
+} else {
+    Resolve-Path $RepoRoot
+}
 Push-Location $repoRoot
 try {
     # Cell table. Canonical order matches run-schedule.md.
@@ -46,6 +54,10 @@ try {
         @{ Id = 'P10'; Artefact = 'v2'; Target = 'mldsa'; Features = ''; Case = 'MLDSA87_generate' }
         @{ Id = 'P11'; Artefact = 'v2'; Target = 'mldsa'; Features = ''; Case = 'MLDSA87_sign' }
         @{ Id = 'P12'; Artefact = 'v2'; Target = 'mldsa'; Features = ''; Case = 'MLDSA87_verify' }
+        @{ Id = 'C1'; Artefact = 'baseline'; Target = 'classical'; Features = ''; Case = 'X25519_generate' }
+        @{ Id = 'C2'; Artefact = 'baseline'; Target = 'classical'; Features = ''; Case = 'X25519_agree' }
+        @{ Id = 'C3'; Artefact = 'baseline'; Target = 'classical'; Features = ''; Case = 'XEdDSA_sign' }
+        @{ Id = 'C4'; Artefact = 'baseline'; Target = 'classical'; Features = ''; Case = 'XEdDSA_verify' }
         @{ Id = 'H2a'; Artefact = 'v2'; Target = 'session'; Features = ''; Case = 'initiate session and encrypt first message' }
         @{ Id = 'H2b'; Artefact = 'v2'; Target = 'session'; Features = ''; Case = 'initiate session and encrypt first message, last-resort only' }
         @{ Id = 'H2c'; Artefact = 'v2'; Target = 'session'; Features = ''; Case = 'session decrypt first message, full mode' }
@@ -57,6 +69,9 @@ try {
         @{ Id = 'B1'; Artefact = 'baseline'; Target = 'baseline_pqxdh'; Features = ''; Case = 'baseline initiate session and encrypt first message' }
         @{ Id = 'B2'; Artefact = 'baseline'; Target = 'baseline_pqxdh'; Features = ''; Case = 'baseline initiate session and encrypt first message, no one-time curve key' }
         @{ Id = 'B3'; Artefact = 'baseline'; Target = 'baseline_pqxdh'; Features = ''; Case = 'baseline decrypt first message' }
+        @{ Id = 'I1'; Artefact = 'v1';       Target = 'session';        Features = ''; Case = 'session establishment and first exchange' }
+        @{ Id = 'I2'; Artefact = 'v2';       Target = 'session';        Features = ''; Case = 'session establishment and first exchange' }
+        @{ Id = 'IB'; Artefact = 'baseline'; Target = 'baseline_pqxdh'; Features = ''; Case = 'baseline session establishment and first exchange' }
     )
 
     # Rotate left by 5 * (Block - 1), wrapping at the cell count.
