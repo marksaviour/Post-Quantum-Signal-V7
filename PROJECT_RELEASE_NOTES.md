@@ -16,7 +16,8 @@ independent of Signal's inherited package version metadata.
 
 - Upstream libsignal snapshot: `0.73.3`.
 - Rust `libsignal-protocol` crate metadata: `0.1.0`.
-- Existing research tags: `v1.0.0`, `v1.0.1`, and `v2.0.0`.
+- Existing research tags: `v1.0.0` and `v2.0.0`; the remaining tags are assigned at release
+  finalisation.
 - Current release candidate: `v2.0.1`.
 - Signal's inherited `RELEASE_NOTES.md` remains at `0.73.3`; these project notes are the source for
   research GitHub releases.
@@ -60,6 +61,21 @@ These snapshots are development baselines, not Post-Quantum Signal release tags:
 - `0.73.3` — adopted on 17 June 2026 in commit
   `26ff061ede6512736a7c51d7bd617673ed031791` as the base for the post-quantum implementation.
 
+## v2.1.0 — Adds benchmarking and testing capability
+
+- **Status:** Release preparation on `working-v2.x`
+- **Release tag:** `v2.1.0` is assigned at release finalisation.
+
+### Changes
+
+- Extends the measurement schedule to 30 cells: classical primitive cells `C1` to `C4` and
+  integrated exchange cells `I1`, `I2`, and `IB`.
+- Adds the `-RepoRoot` parameter to the run script.
+- Adds the integrated exchange benchmark.
+- Aligns the span fixtures with the Chapter 4.3 boundaries.
+- Corrects the documentation and restores upstream copyright notices in the examples.
+- Makes harness diffs trackable.
+
 ## v2.0.1 — Documentation and portability update
 
 - **Status:** In progress on `working-v2.x`
@@ -96,8 +112,9 @@ Remaining planned changes:
 - Complete the project-authored comment audit. Copyright attribution is done; what remains is the
   prose audit of inherited comments that still describe ML-KEM-1024 where the `v2.x` line uses
   HQC-256, for example in `src/state/bundle.rs`, `src/dsa.rs`, and the `tests/session.rs` header.
-- Re-run the HQC protocol tests, examples, known-answer tests, Clippy, and KEM benchmark before
-  release.
+- Re-run the HQC protocol tests, examples, known-answer tests, Clippy, and the KEM benchmark under
+  the campaign environment conditions (mains power, background load minimised) immediately before
+  timing, and record the outcome on the evidence branch.
 - Port the measurement harness to the `v1.x` line with identical benchmark span names, then record
   the five-block measurement campaign on both reference machines.
 
@@ -276,8 +293,8 @@ baseline.
 Conclusion: for a bandwidth- and latency-sensitive messenger, ML-KEM-1024 is the decisively more
 efficient level-5 choice, so Signal's selection is well justified on engineering grounds. HQC-256's
 value is algorithmic diversity on a code-based hardness assumption — NIST selected it in March
-2025 as the backup to ML-KEM, with standardisation as FIPS 207 in progress — which suits it to a
-fallback or hybrid role rather than a drop-in replacement.
+2025 as the backup to ML-KEM, with the draft standard pending and the final expected in 2027 —
+which suits it to a fallback or hybrid role rather than a drop-in replacement.
 
 ### Scope and caveats (all releases)
 

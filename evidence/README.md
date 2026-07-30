@@ -48,7 +48,7 @@ reconstructed after the fact.
 | --- | --- | --- |
 | `criterion/` | Criterion output directories, one per invocation. Each name encodes artefact, feature set, benchmark, block number, position within block, and machine identifier. | Chapter 4.3 |
 | `manifests/` | One environment manifest per machine: machine identifier, CPU, memory, operating system and build number, `rustc -V`, `cargo -V`, `protoc --version`, and the power configuration used. | Chapter 4.3 |
-| `harness-diffs/` | Diff output proving each harness commit adds instruments only, including the `git diff baseline-1.0 baseline-bench-1.0 --stat` check. | Chapter 4 (admissibility of harness commits) |
+| `harness-diffs/` | Diff output proving each harness commit adds instruments only, including the `git diff 26ff061e <baseline harness commit> --stat` check; the release tags replace the raw commits when assigned. | Chapter 4 (admissibility of harness commits) |
 | `schedule/` | The five-block run schedule and the cyclic rotation order, written before any run. | Chapter 4.3 |
 | `sizes/` | Stdout capture from `examples/sizes.rs`. Deterministic, captured once per artefact rather than five times. | Chapter 4.4 |
 
