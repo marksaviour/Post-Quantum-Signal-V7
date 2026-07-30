@@ -14,9 +14,10 @@
 //!
 //! # Supported KEMs
 //! The NIST standardized Kyber1024 and Kyber768 KEMs are supported, together
-//! with ML-KEM-1024 (FIPS 203) and the code-based HQC-256 KEM (FIPS 207). The
-//! latter two back the fully post-quantum PQXDH handshake and let us compare a
-//! lattice-based KEM against a code-based one.
+//! with ML-KEM-1024 (FIPS 203) and the code-based HQC-256 KEM (selected by NIST
+//! for standardisation in March 2025; draft standard pending, final expected
+//! 2027). The latter two back the fully post-quantum PQXDH handshake and let us
+//! compare a lattice-based KEM against a code-based one.
 //!
 //! # Serialization
 //! `PublicKey`s and `SecretKey`s have serialization functions that encode the

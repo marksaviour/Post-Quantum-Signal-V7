@@ -1,9 +1,10 @@
 //
+// Copyright 2024 Signal Messenger, LLC.
 // Copyright 2026 Mark Saviour Farrugia.
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-//! Runnable demonstration of the *complete* fully post-quantum Signal protocol.
+//! Runnable demonstration of a complete Signal session initialized by a fully post-quantum handshake.
 //!
 //! Run it with:
 //!
@@ -159,7 +160,9 @@ async fn run() -> Result<(), SignalProtocolError> {
         println!("    Bob recovered {p:?} using a skipped message key.");
     }
 
-    println!("\nAll checks passed. The full post-quantum protocol ran end to end.");
+    println!(
+        "\nAll checks passed. The post-quantum handshake and subsequent session ran end to end."
+    );
     Ok(())
 }
 

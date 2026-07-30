@@ -44,8 +44,10 @@ const ONE_TIME_KYBER_PRE_KEY_ID: u32 = 8001;
 const ALICE_REGISTRATION_ID: u32 = 1234;
 const BOB_REGISTRATION_ID: u32 = 5678;
 
-/// The KEM under measurement is whichever one the tree defaults to, so this file is identical on
-/// the ML-KEM-1024 and HQC-256 release lines.
+/// The KEM under measurement is whichever one the tree defaults to. The v1.x copy pins the
+/// constant instead of using this cfg gate, because that line does not declare the `hqc256`
+/// feature and the gate would trip `unexpected_cfgs` there; the two copies are otherwise
+/// identical.
 #[cfg(feature = "hqc256")]
 const KEM_KEY_TYPE: kem::KeyType = kem::KeyType::HQC256;
 #[cfg(not(feature = "hqc256"))]
