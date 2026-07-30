@@ -188,7 +188,12 @@ All nine tests Chapter 4.2 names by identifier are present and passing:
 
 Clippy reports two warnings, both pre-existing `v1.0.0` library findings already recorded under
 `v1.0.1` below: `large_enum_variant` in `protocol.rs` and `cast_possible_truncation` in
-`ratchet.rs`. No new finding arises from any instrument added here.
+`ratchet.rs`. No new finding arises from any instrument added here. Clippy was re-run after the
+integrated exchange case was added to `benches/session.rs` and the four bounded span cases were
+aligned with Chapter 4.3 — every store clone moved into an `iter_batched` setup closure, and both
+responder spans now beginning from the serialised message bytes rather than a pre-parsed message —
+and it reported those same two findings and nothing further, with
+`cargo bench --bench session --no-run` compiling the target cleanly.
 
 The domain-separation labels were re-confirmed as the ML-KEM variants,
 `PQXDH_MLKEM1024_MLDSA87_SHA-256` and `PQXDH_MLKEM1024_MLDSA87_transcript`. They enter the HKDF
