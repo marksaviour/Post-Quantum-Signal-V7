@@ -35,3 +35,26 @@ java/server/src/main/resources/*.dll
 Brewfile.lock.json
 
 __pycache__
+
+# Measurement outputs. The measurement instruments and the run schedule are
+# tracked so that others can reproduce the campaign; the figures a run produces
+# are reported in the dissertation rather than committed here. The .gitkeep
+# entries are kept so the directories exist before the runs.
+/evidence/criterion/*
+!/evidence/criterion/.gitkeep
+/evidence/sizes/*
+!/evidence/sizes/.gitkeep
+/evidence/correctness-gate-*.md
+
+# Environment manifests identify a specific machine. They are kept locally and
+# reproduced in the dissertation instead.
+/evidence/manifests/*
+!/evidence/manifests/.gitkeep
+
+# Harness diff and equivalence checks are deliberately not ignored. Chapter 4
+# admits a harness commit only on the archived evidence that it leaves protocol
+# code unchanged, so /evidence/harness-diffs/ is tracked.
+
+# Byproduct of running the vendored crate's tests standalone; outside the
+# harness scope.
+/third-party/hqc-kem/Cargo.lock
