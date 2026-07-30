@@ -79,3 +79,11 @@ harness = false
 name = "kem"
 harness = false
 required-features = ["kyber768"]
+
+[[bench]]
+name = "baseline_pqxdh"
+harness = false
+
+[[bench]]
+name = "classical"
+harness = false
