@@ -1,5 +1,6 @@
 //
 // Copyright 2020 Signal Messenger, LLC.
+// Copyright 2026 Mark Saviour Farrugia.
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
@@ -341,7 +342,7 @@ impl TestStoreBuilder {
                 "Signed pre key ids should be increasing"
             );
         }
-        let pair = kem::KeyPair::generate(kem::KeyType::Kyber1024, &mut self.rng);
+        let pair = kem::KeyPair::generate(kem::KeyType::MLKEM1024, &mut self.rng);
         let public = pair.public_key.serialize();
         let signature = self.sign(&public);
         let record = KyberPreKeyRecord::new(

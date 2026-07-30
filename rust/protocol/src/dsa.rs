@@ -1,3 +1,8 @@
+//
+// Copyright 2026 Mark Saviour Farrugia.
+// SPDX-License-Identifier: AGPL-3.0-only
+//
+
 //! ML-DSA (FIPS 204) digital signatures for fully post-quantum identity keys.
 //!
 //! In the post-quantum PQXDH variant implemented by this crate, the long-term
