@@ -15,7 +15,8 @@ Project versions use Git tags and are independent of Signal's inherited package 
 
 - Upstream libsignal snapshot: `0.73.3`.
 - Rust `libsignal-protocol` crate metadata: `0.1.0`.
-- Existing research tags: `v1.0.0`, `v1.0.1`, and `v2.0.0`.
+- Existing research tags: `v1.0.0` and `v2.0.0`; the remaining tags are assigned at release
+  finalisation.
 - Signal's inherited `RELEASE_NOTES.md` remains at `0.73.3`; these project notes are the source for
   research GitHub releases.
 - Each line's copy of these notes documents that line's releases.
@@ -154,7 +155,9 @@ alongside it, which AGPL-3.0 does not permit.
 
 Chapter 4.2 makes a recorded correctness run a precondition for accepting any timing measurement.
 This run was performed on the tree of the immediately preceding commit; re-run and re-record it if
-any further change lands before the measurement blocks begin.
+any further change lands before the measurement blocks begin. This gate predates the campaign
+environment protocol and is re-run and re-recorded under those conditions (mains power, background
+load minimised) before any timing result is accepted.
 
 ```bash
 cargo test   -p libsignal-protocol --no-default-features --features mlkem1024
@@ -208,6 +211,21 @@ signature, so neither harness ports across unchanged. Chapter 4.5 admits only re
 harness commits whose archived diffs confirm protocol code is unchanged, so the baseline harness
 must be a benchmark-and-example-files-only addition on top of `26ff061`, with that diff archived.
 Until it exists, Sections 5.3 and 5.4 have no baseline column and RQ2 cannot be answered as posed.
+
+## v1.1.0 — Adds benchmarking and testing capability
+
+- **Status:** Release preparation on `working-v1.x`
+- **Release tag:** `v1.1.0` is assigned at release finalisation.
+
+### Changes
+
+- Adds bounded initiator and responder handshake spans.
+- Adds the session establishment and first exchange benchmark.
+- Aligns the span fixtures with the Chapter 4.3 boundaries: store preparation remains outside the
+  timed regions, and responder spans begin from the serialised wire bytes.
+- Adds a deterministic size-capture example.
+- Corrects the store-backed test fixture to ML-KEM-1024.
+- Completes the copyright-header audit.
 
 ## v1.0.1 — Full public-API session demonstration
 
