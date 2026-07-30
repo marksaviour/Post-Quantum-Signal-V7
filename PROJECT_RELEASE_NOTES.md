@@ -1,3 +1,8 @@
+<!--
+Copyright 2026 Mark Saviour Farrugia.
+SPDX-License-Identifier: AGPL-3.0-only
+-->
+
 # Project Release Notes
 
 This file is the single project-authored document for the `v1.x` (ML-KEM-1024 + ML-DSA-87) line
@@ -50,6 +55,154 @@ These snapshots are development baselines, not Post-Quantum Signal release tags:
   `f75f33e115f86ce9f0e804447da249752d33093d`.
 - `0.73.3` — adopted on 17 June 2026 in commit
   `26ff061ede6512736a7c51d7bd617673ed031791` as the base for the post-quantum implementation.
+
+## Measurement harness — unreleased, `working-v1.x`
+
+Preparation of this line for the Chapter 5 measurement. Every change is confined to
+`benches/`, `examples/`, `tests/`, and these notes; `rust/protocol/src/` carries no behavioural
+change, so results measured here remain comparable with the tagged releases above.
+
+### Instruments on this line
+
+| Instrument | Produces | Status |
+| --- | --- | --- |
+| `examples/sizes.rs` | Serialised sizes for both KEM modes, at fixed canonical inputs | Added |
+| `benches/session.rs` — `session_initiate` | Initiator span, both KEM modes | Added |
+| `benches/session.rs` — `session_decrypt_first_message_modes` | Responder span, both KEM modes | Added |
+| `benches/session.rs` — `session_encrypt`, `session_encrypt_decrypt` | Steady-state session spans | Inherited from upstream |
+| `benches/kem.rs` | — | Inherited; **not** a Version 1 measurement source |
+| `benches/ratchet.rs`, `benches/sealed_sender.rs` | — | Inherited; unused by this project |
+
+The two spans that Chapter 4.3 bounds explicitly are the initiator span, from processing the
+responder's bundle to the serialised initial `PreKeySignalMessage`, and the responder span, from
+that serialised message to the derived session using a fresh store. Store creation and cloning sit
+outside both timed regions. Each is measured in last-resort-only and last-resort-plus-one-time
+mode, giving the four benchmark identifiers `initiate session and encrypt first message`,
+`initiate session and encrypt first message, last-resort only`,
+`session decrypt first message, full mode`, and
+`session decrypt first message, last-resort only`.
+
+Run the instruments with the Version 1 feature set explicitly, never with defaults:
+
+```bash
+cargo run   -p libsignal-protocol --example sizes  --no-default-features --features mlkem1024
+cargo bench -p libsignal-protocol --bench  session --no-default-features --features mlkem1024
+```
+
+`examples/sizes.rs` differs from the `v2.x` copy in one place. The `v2.x` copy selects its KEM with
+a `cfg(feature = "hqc256")` gate; this line pins the constant instead, because `hqc256` is not a
+feature this manifest declares and naming it here warns under `unexpected_cfgs`, which would breach
+the clippy condition on the correctness gate below. The two copies are otherwise identical.
+
+### Corrected KEM type in the store-backed test fixture
+
+`TestStoreBuilder::add_kyber_pre_key` generated a `Kyber1024` prekey rather than an `MLKEM1024`
+one. Upstream `0.73.3` had three KEM generation sites in `tests/support/mod.rs`, all `Kyber1024`.
+The `v1.0.0` conversion changed two of them and added two further sites for the one-time prekey,
+giving the five this line now has, but it missed the third upstream site, inside `TestStoreBuilder`.
+The surrounding identifiers all retain Signal's inherited "kyber" vocabulary, so
+`kyber_pre_key_pair` holding a `Kyber1024` constant read as consistent.
+
+`with_kyber_pre_key` is reached by three of the nine tests Chapter 4.2 names as evidence —
+`test_prekey_handshake_without_one_time_kem`, `test_bad_signed_pre_key_signature`, and
+`test_bad_kyber_pre_key_signature` — and by the last-resort-only arms of both new benchmark spans.
+Until this fix, the store-backed full-protocol path in last-resort-only mode had never been
+exercised with ML-KEM-1024 on this line.
+
+The tests pass both before and after, which is the point: the handshake is KEM-agnostic and both
+primitives are level 5 with identical 1568-byte keys and ciphertexts, so no round trip and no size
+assertion could have revealed the substitution. It is worth recording as evidence for the
+limitation Chapter 4.5 already states, since those three tests were running a handshake whose HKDF
+`info` label asserted `PQXDH_MLKEM1024_MLDSA87_SHA-256` while the encapsulation was Kyber1024. The
+label asserts the algorithm suite; it does not enforce it.
+
+### `benches/kem.rs` is not a Version 1 measurement source
+
+`benches/kem.rs` on this line is unmodified upstream Signal code and still carries
+`required-features = ["kyber768"]`. Its cases and its feature set both differ from the corrected
+KEM target, which Chapter 4.3 runs from the common primitive harness derived from `v2.0.0` with
+`hqc256` and `mlkem1024` enabled. It is left untouched deliberately. Do not run it and report the
+output as a Version 1 result. It is skipped by the correctness gate below, because the Version 1
+feature set does not enable `kyber768`.
+
+### ML-DSA-87 is measured once, from the common primitive harness
+
+`benches/mldsa.rs` is deliberately absent from this line. ML-DSA-87 is byte-identical across both
+release lines, with both resolving `libcrux-ml-dsa` 0.0.8, so it is measured once from the common
+primitive harness on the same lockfile-and-diff argument Chapter 4.3 already applies to the KEM
+target. Measuring identical code twice would produce two numbers differing only by noise and invite
+a comparison the chapter does not make. Chapter 4.3 must state this explicitly; the alternative,
+should it be revisited, is to copy `benches/mldsa.rs` here and add a `[[bench]]` entry for it.
+
+### The runnable demonstrations differ from the `v2.x` line by design
+
+`examples/full_session.rs` and `examples/pqxdh.rs` are not kept in step with the `v2.x` copies, and
+the divergence should not be reported as drift. Each line's demonstration names the KEM that line
+actually builds, so the ML-KEM-1024 wording here is correct and the HQC-256 wording there is
+correct. The remaining differences are an identifier rename on `v2.x` from `signed_kem_pair` to
+`signed_kyber_pair`, which moves back toward the inherited "kyber" vocabulary implicated in the
+fixture defect above, and a `v2.x` heading describing the artefact as the complete post-quantum
+Signal protocol, which overstates it: the Double Ratchet after the handshake still uses X25519, as
+this line's wording and Chapter 3.1.1's scoping both say.
+
+Two corrections are outstanding **on `v2.x`, not here**: restore the wording to match this line's,
+and restore the upstream `Copyright 2024 Signal Messenger, LLC.` notice to both files. Those are
+the only two files in which the `v2.0.1` header audit replaced Signal's notice instead of adding
+alongside it, which AGPL-3.0 does not permit.
+
+### Correctness gate
+
+Chapter 4.2 makes a recorded correctness run a precondition for accepting any timing measurement.
+This run was performed on the tree of the immediately preceding commit; re-run and re-record it if
+any further change lands before the measurement blocks begin.
+
+```bash
+cargo test   -p libsignal-protocol --no-default-features --features mlkem1024
+cargo clippy -p libsignal-protocol --no-default-features --features mlkem1024 --all-targets
+```
+
+- **Environment:** `rustc` 1.87.0-nightly (617aad8c2 2025-02-24), `cargo` 1.87.0-nightly
+  (1d1d646c0 2025-02-21), pinned by `rust-toolchain.toml` to `nightly-2025-02-25`.
+- **Resolved primitives:** `libcrux-ml-kem` 0.0.2, `libcrux-ml-dsa` 0.0.8, `hkdf` 0.12.4,
+  `sha2` 0.10.8, `curve25519-dalek` 4.1.3 (Signal fork), `criterion` 0.5.1.
+- **Result:** 68 passed, 0 failed, 2 ignored.
+
+| Target | Passed | Failed | Ignored |
+| --- | --- | --- | --- |
+| `libsignal_protocol` unit tests | 45 | 0 | 0 |
+| `tests/groups.rs` | 8 | 0 | 1 |
+| `tests/ratchet.rs` | 3 | 0 | 0 |
+| `tests/session.rs` | 10 | 0 | 0 |
+| `tests/sealed_sender.rs` | 0 | 0 | 0 |
+| Doc-tests | 2 | 0 | 1 |
+
+`tests/sealed_sender.rs` is empty under this feature set because Sealed Sender is gated off, and
+the two ignored cases are the upstream slow group test and one non-executable doc example.
+
+All nine tests Chapter 4.2 names by identifier are present and passing:
+`test_full_pq_prekey_handshake`, `test_prekey_handshake_without_one_time_kem`,
+`test_alice_and_bob_agree_with_one_time_kem_prekey`,
+`test_alice_and_bob_agree_without_one_time_kem_prekey`, `test_bad_signed_pre_key_signature`,
+`test_bad_kyber_pre_key_signature`, `test_bob_rejects_bad_transcript_signature`,
+`prekey_message_failed_decryption_does_not_update_stores`, and `test_repeat_bundle_message`.
+
+Clippy reports two warnings, both pre-existing `v1.0.0` library findings already recorded under
+`v1.0.1` below: `large_enum_variant` in `protocol.rs` and `cast_possible_truncation` in
+`ratchet.rs`. No new finding arises from any instrument added here.
+
+The domain-separation labels were re-confirmed as the ML-KEM variants,
+`PQXDH_MLKEM1024_MLDSA87_SHA-256` and `PQXDH_MLKEM1024_MLDSA87_transcript`. They enter the HKDF
+`info` value and the signed transcript, so substituting the HQC forms would silently invalidate
+every Version 1 result.
+
+### Still outstanding before Chapter 5
+
+The baseline harness does not exist on any branch. Commit `26ff061` is unmodified upstream: it has
+no size capture, no span benchmarks, a Kyber1024 KEM, no ML-DSA identity, and no transcript
+signature, so neither harness ports across unchanged. Chapter 4.5 admits only results from pinned
+harness commits whose archived diffs confirm protocol code is unchanged, so the baseline harness
+must be a benchmark-and-example-files-only addition on top of `26ff061`, with that diff archived.
+Until it exists, Sections 5.3 and 5.4 have no baseline column and RQ2 cannot be answered as posed.
 
 ## v1.0.1 — Full public-API session demonstration
 
@@ -175,8 +328,12 @@ cargo build -p libsignal-protocol
 cargo test  -p libsignal-protocol
 cargo run   -p libsignal-protocol --example pqxdh          # handshake demonstration
 cargo run   -p libsignal-protocol --example full_session   # full public-API session flow
-cargo bench -p libsignal-protocol --bench kem
 ```
+
+`default = ["mlkem1024"]`, so plain invocations build this line's configuration. State the feature
+set explicitly anyway for anything whose output is reported, as the measurement-harness section
+above does. `cargo bench --bench kem` is deliberately not listed: that target is inherited upstream
+code and is not a Version 1 measurement source.
 
 Building requires a C/C++ linker toolchain and `protoc`, which `rust/protocol/build.rs` uses to
 compile the wire and storage protobuf definitions.
