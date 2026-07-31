@@ -1,0 +1,809 @@
+diff --git a/rust/protocol/Cargo.toml b/rust/protocol/Cargo.toml
+index 4ced700..5330032 100644
+--- a/rust/protocol/Cargo.toml
++++ b/rust/protocol/Cargo.toml
+@@ -79,3 +79,11 @@ harness = false
+ name = "kem"
+ harness = false
+ required-features = ["kyber768"]
++
++[[bench]]
++name = "baseline_pqxdh"
++harness = false
++
++[[bench]]
++name = "classical"
++harness = false
+diff --git a/rust/protocol/benches/baseline_pqxdh.rs b/rust/protocol/benches/baseline_pqxdh.rs
+new file mode 100644
+index 0000000..658696c
+--- /dev/null
++++ b/rust/protocol/benches/baseline_pqxdh.rs
+@@ -0,0 +1,303 @@
++//
++// Copyright 2026 Mark Saviour Farrugia.
++// SPDX-License-Identifier: AGPL-3.0-only
++//
++
++//! Baseline measurement spans for the deployed handshake at this commit: X3DH over X25519 with
++//! XEdDSA identities and an optional Kyber-1024 prekey.
++//!
++//! These are the baseline counterparts to the bounded handshake spans on the version trees. Every
++//! case name is prefixed `baseline`, and the mode that varies is named for the one-time *curve*
++//! prekey, because what the baseline can omit is the optional one-time X25519 prekey, not the
++//! optional one-time KEM prekey the version trees omit. The two are not the same axis and the
++//! cases are named so as not to imply otherwise.
++//!
++//! Nothing here touches `src/`. The whole file is an instrument added on top of the unmodified
++//! upstream commit, which is what Chapter 4 requires of a harness commit.
++
++use std::time::SystemTime;
++
++use criterion::{criterion_group, criterion_main, Criterion};
++use futures_util::FutureExt;
++use libsignal_protocol::*;
++use rand::rngs::OsRng;
++use rand::TryRngCore as _;
++
++#[path = "../tests/support/mod.rs"]
++mod support;
++
++/// Initiator span: begins by processing the responder's bundle and ends once the initial
++/// `PreKeySignalMessage` has been serialised. `PreKeySignalMessage::new` serialises eagerly into
++/// its `serialized` field, so serialisation is already accounted for when `support::encrypt`
++/// returns.
++///
++/// One-time curve prekey present, which is what `support::create_pre_key_bundle` publishes.
++pub fn baseline_initiate_result(c: &mut Criterion) -> Result<(), SignalProtocolError> {
++    let mut csprng = OsRng.unwrap_err();
++    let bob_address = ProtocolAddress::new("+14158888888".to_owned(), 1.into());
++
++    // Fixtures: built once, outside every timed region.
++    let mut bob_store = support::TestStoreBuilder::new().store;
++    let bob_bundle = support::create_pre_key_bundle(&mut bob_store, &mut csprng)
++        .now_or_never()
++        .expect("sync")?;
++    assert!(
++        bob_bundle.pre_key_id()?.is_some(),
++        "expected a one-time curve prekey in the bundle"
++    );
++    assert!(
++        bob_bundle.has_kyber_pre_key(),
++        "expected the hybrid bundle to carry a Kyber prekey"
++    );
++
++    let alice_store = support::test_in_memory_protocol_store()?;
++
++    c.bench_function("baseline initiate session and encrypt first message", |b| {
++        b.iter_batched(
++            || alice_store.clone(),
++            |mut alice_store| {
++                process_prekey_bundle(
++                    &bob_address,
++                    &mut alice_store.session_store,
++                    &mut alice_store.identity_store,
++                    &bob_bundle,
++                    SystemTime::now(),
++                    &mut OsRng.unwrap_err(),
++                )
++                .now_or_never()
++                .expect("sync")
++                .expect("valid bundle");
++
++                let initial = support::encrypt(&mut alice_store, &bob_address, "a short message")
++                    .now_or_never()
++                    .expect("sync")
++                    .expect("success");
++
++                criterion::black_box(initial.serialize().len())
++            },
++            criterion::BatchSize::SmallInput,
++        )
++    });
++
++    Ok(())
++}
++
++/// The same initiator span with the optional one-time curve prekey absent, so the X3DH secret
++/// loses its `DH(EK_A, OPK_B)` term. A builder that is never given a one-time prekey yields a
++/// bundle without one.
++pub fn baseline_initiate_no_one_time_curve_key_result(
++    c: &mut Criterion,
++) -> Result<(), SignalProtocolError> {
++    let bob_address = ProtocolAddress::new("+14158888888".to_owned(), 1.into());
++
++    // Fixtures: built once, outside every timed region.
++    let bob_builder = support::TestStoreBuilder::new()
++        .with_signed_pre_key(22.into())
++        .with_kyber_pre_key(8000.into());
++    let bob_bundle = bob_builder.make_bundle_with_latest_keys(1.into());
++    assert!(
++        bob_bundle.pre_key_id()?.is_none(),
++        "expected no one-time curve prekey in the bundle"
++    );
++    assert!(
++        bob_bundle.has_kyber_pre_key(),
++        "expected the hybrid bundle to carry a Kyber prekey"
++    );
++
++    let alice_store = support::test_in_memory_protocol_store()?;
++
++    c.bench_function(
++        "baseline initiate session and encrypt first message, no one-time curve key",
++        |b| {
++            b.iter_batched(
++                || alice_store.clone(),
++                |mut alice_store| {
++                    process_prekey_bundle(
++                        &bob_address,
++                        &mut alice_store.session_store,
++                        &mut alice_store.identity_store,
++                        &bob_bundle,
++                        SystemTime::now(),
++                        &mut OsRng.unwrap_err(),
++                    )
++                    .now_or_never()
++                    .expect("sync")
++                    .expect("valid bundle");
++
++                    let initial =
++                        support::encrypt(&mut alice_store, &bob_address, "a short message")
++                            .now_or_never()
++                            .expect("sync")
++                            .expect("success");
++
++                    criterion::black_box(initial.serialize().len())
++                },
++                criterion::BatchSize::SmallInput,
++            )
++        },
++    );
++
++    Ok(())
++}
++
++/// Responder span: from the serialised initial message and a fresh store through to a successful
++/// decryption and the derived session being inserted. This is the side that performs the KEM
++/// decapsulation, consumes the one-time prekeys, and derives the session.
++///
++/// One-time curve prekey present.
++pub fn baseline_decrypt_first_message_result(
++    c: &mut Criterion,
++) -> Result<(), SignalProtocolError> {
++    let mut csprng = OsRng.unwrap_err();
++    let alice_address = ProtocolAddress::new("+14159999999".to_owned(), 1.into());
++    let bob_address = ProtocolAddress::new("+14158888888".to_owned(), 1.into());
++
++    // Fixtures: built once, outside every timed region.
++    let mut bob_store = support::TestStoreBuilder::new().store;
++    let bob_bundle = support::create_pre_key_bundle(&mut bob_store, &mut csprng)
++        .now_or_never()
++        .expect("sync")?;
++    assert!(
++        bob_bundle.pre_key_id()?.is_some(),
++        "expected a one-time curve prekey in the bundle"
++    );
++
++    let mut alice_store = support::test_in_memory_protocol_store()?;
++    process_prekey_bundle(
++        &bob_address,
++        &mut alice_store.session_store,
++        &mut alice_store.identity_store,
++        &bob_bundle,
++        SystemTime::now(),
++        &mut csprng,
++    )
++    .now_or_never()
++    .expect("sync")?;
++    let initial = support::encrypt(&mut alice_store, &bob_address, "a short message")
++        .now_or_never()
++        .expect("sync")?;
++    assert_eq!(initial.message_type(), CiphertextMessageType::PreKey);
++    let initial_bytes = initial.serialize().to_vec();
++
++    c.bench_function("baseline decrypt first message", |b| {
++        b.iter_batched(
++            || bob_store.clone(),
++            |mut bob_store| {
++                let received = CiphertextMessage::PreKeySignalMessage(
++                    PreKeySignalMessage::try_from(initial_bytes.as_slice())
++                        .expect("valid wire form"),
++                );
++                let plaintext = support::decrypt(&mut bob_store, &alice_address, &received)
++                    .now_or_never()
++                    .expect("sync")
++                    .expect("success");
++
++                criterion::black_box(plaintext.len())
++            },
++            criterion::BatchSize::SmallInput,
++        )
++    });
++
++    Ok(())
++}
++
++/// Integrated span: a session confirmed in both directions, from the initiator receiving the
++/// responder's bundle to the initiator decrypting the responder's first reply. The two spans above
++/// bound the initiator and responder halves separately; this one measures them as a client
++/// experiences them, so the cost of reaching a usable session is available as a single figure.
++///
++/// One mode only: the responder's bundle carries the one-time curve prekey. Both messages cross
++/// the timed region in serialised form, as they would on the wire.
++pub fn baseline_establish_and_first_exchange_result(
++    c: &mut Criterion,
++) -> Result<(), SignalProtocolError> {
++    let mut csprng = OsRng.unwrap_err();
++    let alice_address = ProtocolAddress::new("+14159999999".to_owned(), 1.into());
++    let bob_address = ProtocolAddress::new("+14158888888".to_owned(), 1.into());
++
++    // Fixtures: built once, outside every timed region.
++    let mut bob_store = support::TestStoreBuilder::new().store;
++    let bob_bundle = support::create_pre_key_bundle(&mut bob_store, &mut csprng)
++        .now_or_never()
++        .expect("sync")?;
++    assert!(
++        bob_bundle.pre_key_id()?.is_some(),
++        "expected a one-time curve prekey in the bundle"
++    );
++
++    let alice_store = support::test_in_memory_protocol_store()?;
++
++    c.bench_function("baseline session establishment and first exchange", |b| {
++        b.iter_batched(
++            || (alice_store.clone(), bob_store.clone()),
++            |(mut alice_store, mut bob_store)| {
++                process_prekey_bundle(
++                    &bob_address,
++                    &mut alice_store.session_store,
++                    &mut alice_store.identity_store,
++                    &bob_bundle,
++                    SystemTime::now(),
++                    &mut OsRng.unwrap_err(),
++                )
++                .now_or_never()
++                .expect("sync")
++                .expect("valid bundle");
++
++                let initial = support::encrypt(&mut alice_store, &bob_address, "a short message")
++                    .now_or_never()
++                    .expect("sync")
++                    .expect("success");
++                let received = CiphertextMessage::PreKeySignalMessage(
++                    PreKeySignalMessage::try_from(initial.serialize()).expect("valid wire form"),
++                );
++                support::decrypt(&mut bob_store, &alice_address, &received)
++                    .now_or_never()
++                    .expect("sync")
++                    .expect("success");
++
++                let reply = support::encrypt(&mut bob_store, &alice_address, "a short message")
++                    .now_or_never()
++                    .expect("sync")
++                    .expect("success");
++                let received = CiphertextMessage::SignalMessage(
++                    SignalMessage::try_from(reply.serialize()).expect("valid wire form"),
++                );
++                let plaintext = support::decrypt(&mut alice_store, &bob_address, &received)
++                    .now_or_never()
++                    .expect("sync")
++                    .expect("success");
++
++                criterion::black_box(plaintext.len())
++            },
++            criterion::BatchSize::SmallInput,
++        )
++    });
++
++    Ok(())
++}
++
++pub fn baseline_initiate(c: &mut Criterion) {
++    baseline_initiate_result(c).expect("no errors");
++}
++
++pub fn baseline_initiate_no_one_time_curve_key(c: &mut Criterion) {
++    baseline_initiate_no_one_time_curve_key_result(c).expect("no errors");
++}
++
++pub fn baseline_decrypt_first_message(c: &mut Criterion) {
++    baseline_decrypt_first_message_result(c).expect("no errors");
++}
++
++pub fn baseline_establish_and_first_exchange(c: &mut Criterion) {
++    baseline_establish_and_first_exchange_result(c).expect("no errors");
++}
++
++criterion_group!(
++    benches,
++    baseline_initiate,
++    baseline_initiate_no_one_time_curve_key,
++    baseline_decrypt_first_message,
++    baseline_establish_and_first_exchange
++);
++
++criterion_main!(benches);
+diff --git a/rust/protocol/benches/classical.rs b/rust/protocol/benches/classical.rs
+new file mode 100644
+index 0000000..b7077e2
+--- /dev/null
++++ b/rust/protocol/benches/classical.rs
+@@ -0,0 +1,85 @@
++//
++// Copyright 2026 Mark Saviour Farrugia.
++// SPDX-License-Identifier: AGPL-3.0-only
++//
++//! The baseline's classical primitives, measured as individual operations.
++//!
++//! These belong to one artefact only. The version trees replace X25519 agreement and XEdDSA
++//! authentication with a KEM and ML-DSA, so there is no counterpart there to measure against, and
++//! unlike the post-quantum primitive cells these cannot be taken once from the common `v2` tree.
++//!
++//! Structured after `benches/mldsa.rs` on the version trees, and signing the same fixed message,
++//! so the classical and post-quantum signature figures are read over identical input.
++use std::hint::black_box;
++
++use criterion::{criterion_group, criterion_main, Criterion};
++use libsignal_protocol::KeyPair;
++use rand::rngs::OsRng;
++use rand::TryRngCore as _;
++
++/// A fixed message so that signing and verification are measured over a
++/// constant input across artefacts and invocations. This is the message
++/// `benches/mldsa.rs` signs on the version trees.
++const MESSAGE: &[u8] = b"pqs-v7 fixed benchmark message";
++
++fn bench_classical(c: &mut Criterion) {
++    let mut rng = OsRng.unwrap_err();
++
++    // Fixtures built outside every timed region.
++    let key_pair = KeyPair::generate(&mut rng);
++    let peer_key_pair = KeyPair::generate(&mut rng);
++    let signature = key_pair
++        .calculate_signature(MESSAGE, &mut rng)
++        .expect("signing works");
++    assert!(
++        key_pair.public_key.verify_signature(MESSAGE, &signature),
++        "the prepared signature must verify"
++    );
++
++    eprintln!("\nX25519 and XEdDSA sizes (bytes):");
++    eprintln!(
++        "  public key  : {}",
++        key_pair.public_key.public_key_bytes().len()
++    );
++    eprintln!(
++        "  private key : {}",
++        key_pair.private_key.serialize().len()
++    );
++    eprintln!("  signature   : {}", signature.len());
++    eprintln!();
++
++    c.bench_function("X25519_generate", |b| {
++        b.iter(|| {
++            black_box(KeyPair::generate(&mut rng));
++        });
++    });
++
++    c.bench_function("X25519_agree", |b| {
++        b.iter(|| {
++            black_box(
++                key_pair
++                    .calculate_agreement(&peer_key_pair.public_key)
++                    .expect("agreement works"),
++            );
++        });
++    });
++
++    c.bench_function("XEdDSA_sign", |b| {
++        b.iter(|| {
++            black_box(
++                key_pair
++                    .calculate_signature(MESSAGE, &mut rng)
++                    .expect("signing works"),
++            );
++        });
++    });
++
++    c.bench_function("XEdDSA_verify", |b| {
++        b.iter(|| {
++            black_box(key_pair.public_key.verify_signature(MESSAGE, &signature));
++        });
++    });
++}
++
++criterion_group!(benches, bench_classical);
++criterion_main!(benches);
+diff --git a/rust/protocol/examples/sizes.rs b/rust/protocol/examples/sizes.rs
+new file mode 100644
+index 0000000..6749c7b
+--- /dev/null
++++ b/rust/protocol/examples/sizes.rs
+@@ -0,0 +1,387 @@
++//
++// Copyright 2026 Mark Saviour Farrugia.
++// SPDX-License-Identifier: AGPL-3.0-only
++//
++
++//! Deterministic size capture for the deployed hybrid handshake: X3DH over X25519 with XEdDSA
++//! identities and a signed Kyber-1024 prekey.
++//!
++//! Run it with:
++//!
++//! ```sh
++//! cargo run --release -p libsignal-protocol --example sizes
++//! ```
++//!
++//! Serialised lengths are deterministic, so this is an example rather than a Criterion benchmark:
++//! it needs one run per artefact, not five, and putting it in a benchmark would imply the figures
++//! vary. Timing lives in `benches/`; nothing here is timed.
++//!
++//! A serialised length is byte-exact only when the mode, plaintext, registration and device
++//! identifiers, prekey identifiers, counters, and field presence are all fixed. Every one of those
++//! is pinned by the constants below, so two runs on any machine produce identical output. Note that
++//! the identifiers are protobuf varints, so their *values* — not merely their being fixed — affect
++//! the encoded lengths reported here.
++//!
++//! This is the baseline counterpart of the version copies, and it keeps their structure and output
++//! format so the three artefacts can be read side by side. What varies between the two modes is
++//! the optional one-time *curve* prekey; the baseline publishes a single KEM prekey and has no
++//! one-time KEM prekey to withhold, so its modes are not the versions' modes under other names.
++
++use std::time::SystemTime;
++
++use futures_util::FutureExt as _;
++use libsignal_protocol::*;
++use rand::rngs::OsRng;
++use rand::{CryptoRng, Rng, TryRngCore as _};
++
++/// Fixed plaintext for both the initial message and the first reply.
++const PLAINTEXT: &str = "pqs-v7 fixed size-capture plaintext";
++const DEVICE_ID: u32 = 1;
++const SIGNED_PRE_KEY_ID: u32 = 22;
++const KYBER_PRE_KEY_ID: u32 = 8000;
++/// The baseline's optional one-time prekey is a curve key rather than a KEM key. It is given the
++/// identifier the version copies give their one-time KEM prekey, so the two encode to varints of
++/// the same width.
++const ONE_TIME_PRE_KEY_ID: u32 = 8001;
++
++/// Registration ids are fixed here rather than generated, because they are varint-encoded into the
++/// `PreKeySignalMessage` and so affect its serialised length. Valid registration ids fit in 14
++/// bits.
++const ALICE_REGISTRATION_ID: u32 = 1234;
++const BOB_REGISTRATION_ID: u32 = 5678;
++
++/// The KEM under measurement. This line builds Kyber-1024 and nothing else, so the constant is
++/// pinned, as it is on the v1.x copy.
++const KEM_KEY_TYPE: kem::KeyType = kem::KeyType::Kyber1024;
++
++/// Whether the responder publishes the optional one-time curve prekey.
++#[derive(Copy, Clone)]
++enum Mode {
++    NoOneTimeCurveKey,
++    OneTimeCurveKey,
++}
++
++impl Mode {
++    fn label(self) -> &'static str {
++        match self {
++            Mode::NoOneTimeCurveKey => "no one-time curve key",
++            Mode::OneTimeCurveKey => "one-time curve key present",
++        }
++    }
++
++    fn has_one_time(self) -> bool {
++        matches!(self, Mode::OneTimeCurveKey)
++    }
++}
++
++fn main() -> Result<(), SignalProtocolError> {
++    // Driving the whole protocol as a single async state machine can need more than the default
++    // ~1 MiB main-thread stack on some platforms (notably Windows). The version copies run on a
++    // roomier thread for that reason, and this one does the same so the three captures are
++    // produced by the same harness shape.
++    std::thread::Builder::new()
++        .stack_size(32 * 1024 * 1024)
++        .spawn(|| {
++            async { run().await }
++                .now_or_never()
++                .expect("in-memory stores never yield")
++        })
++        .expect("failed to spawn worker thread")
++        .join()
++        .expect("worker thread panicked")
++}
++
++async fn run() -> Result<(), SignalProtocolError> {
++    println!("=== Serialised sizes: {KEM_KEY_TYPE:?} KEM + X25519 identity (XEdDSA) ===");
++    println!();
++    println!("Fixed inputs");
++    println!("  plaintext                  : {PLAINTEXT:?} ({} B)", PLAINTEXT.len());
++    println!("  device id                  : {DEVICE_ID}");
++    println!("  signed prekey id           : {SIGNED_PRE_KEY_ID}");
++    println!("  signed KEM prekey id       : {KYBER_PRE_KEY_ID}");
++    println!("  one-time curve prekey id   : {ONE_TIME_PRE_KEY_ID}");
++    println!("  initiator registration id  : {ALICE_REGISTRATION_ID}");
++    println!("  responder registration id  : {BOB_REGISTRATION_ID}");
++
++    report_primitives()?;
++
++    for mode in [Mode::NoOneTimeCurveKey, Mode::OneTimeCurveKey] {
++        report_mode(mode).await?;
++    }
++
++    println!();
++    println!("All lengths in bytes. `raw` excludes and `tagged` includes the 1-byte algorithm");
++    println!("identifier this artefact prefixes to serialised keys and KEM ciphertexts. Shared");
++    println!("secrets, private curve keys, and XEdDSA signatures carry no such tag, so they are");
++    println!("reported once.");
++    Ok(())
++}
++
++/// Primitive lengths. These are properties of the algorithms, so they are identical in both modes
++/// and are reported once rather than repeated under each mode heading.
++fn report_primitives() -> Result<(), SignalProtocolError> {
++    let mut rng = OsRng.unwrap_err();
++
++    let kem_pair = kem::KeyPair::generate(KEM_KEY_TYPE, &mut rng);
++    let (shared_secret, ciphertext) = kem_pair.public_key.encapsulate(&mut rng)?;
++    let kem_public = kem_pair.public_key.serialize();
++    let kem_secret = kem_pair.secret_key.serialize();
++
++    let identity = IdentityKeyPair::generate(&mut rng);
++    let signature = identity
++        .private_key()
++        .calculate_signature(&kem_public, &mut rng)?;
++    let ratchet_pair = KeyPair::generate(&mut rng);
++
++    println!();
++    println!("Primitive lengths (identical in both modes)");
++    println!("  {:<32}{:>8}{:>9}", "quantity", "raw", "tagged");
++    print_tagged_row(&format!("{KEM_KEY_TYPE:?} public key"), kem_public.len());
++    print_tagged_row(&format!("{KEM_KEY_TYPE:?} secret key"), kem_secret.len());
++    print_tagged_row(&format!("{KEM_KEY_TYPE:?} ciphertext"), ciphertext.len());
++    print_untagged_row("KEM shared secret", shared_secret.len());
++    print_tagged_row(
++        "X25519 identity public key",
++        identity.identity_key().serialize().len(),
++    );
++    print_untagged_row(
++        "X25519 identity secret key",
++        identity.private_key().serialize().len(),
++    );
++    print_untagged_row("XEdDSA signature", signature.len());
++    print_tagged_row(
++        "X25519 ratchet public key",
++        ratchet_pair.public_key.serialize().len(),
++    );
++
++    Ok(())
++}
++
++/// Print a quantity that carries a 1-byte algorithm tag, given its tagged length.
++fn print_tagged_row(label: &str, tagged_len: usize) {
++    println!("  {:<32}{:>8}{:>9}", label, tagged_len - 1, tagged_len);
++}
++
++/// Print a quantity that carries no algorithm tag, so has a single length.
++fn print_untagged_row(label: &str, len: usize) {
++    println!("  {:<32}{:>8}{:>9}", label, len, "-");
++}
++
++async fn report_mode(mode: Mode) -> Result<(), SignalProtocolError> {
++    let mut rng = OsRng.unwrap_err();
++
++    let alice_address = ProtocolAddress::new("+14151111111".to_owned(), DEVICE_ID.into());
++    let bob_address = ProtocolAddress::new("+14151111112".to_owned(), DEVICE_ID.into());
++
++    let mut alice_store = make_store(ALICE_REGISTRATION_ID, &mut rng)?;
++    let mut bob_store = make_store(BOB_REGISTRATION_ID, &mut rng)?;
++
++    let bundle = publish_bundle(&mut bob_store, mode, &mut rng).await?;
++    assert_eq!(bundle.pre_key_id()?.is_some(), mode.has_one_time());
++
++    println!();
++    println!("--- Mode: {} ---", mode.label());
++
++    // Bundle components. `PreKeyBundle` has no complete wire serialiser in this crate, so this is
++    // the sum of its cryptographic components and deliberately not called a serialised bundle.
++    let mut components: Vec<(String, usize)> = vec![
++        (
++            "identity key (X25519, tagged)".to_owned(),
++            bundle.identity_key()?.serialize().len(),
++        ),
++        (
++            "signed X25519 ratchet key (tagged)".to_owned(),
++            bundle.signed_pre_key_public()?.serialize().len(),
++        ),
++        (
++            "ratchet key signature (raw)".to_owned(),
++            bundle.signed_pre_key_signature()?.len(),
++        ),
++        (
++            format!("signed {KEM_KEY_TYPE:?} prekey (tagged)"),
++            bundle
++                .kyber_pre_key_public()?
++                .expect("hybrid bundle carries a KEM prekey")
++                .serialize()
++                .len(),
++        ),
++        (
++            "signed KEM prekey signature (raw)".to_owned(),
++            bundle
++                .kyber_pre_key_signature()?
++                .expect("hybrid bundle carries a KEM prekey signature")
++                .len(),
++        ),
++    ];
++    // The baseline's one-time curve prekey is unsigned, so it contributes a key and no signature.
++    if let Some(public) = bundle.pre_key_public()? {
++        components.push((
++            "one-time X25519 prekey (tagged)".to_owned(),
++            public.serialize().len(),
++        ));
++    }
++
++    println!("  Published bundle components");
++    for (label, len) in &components {
++        println!("    {:<50}{:>8}", label, len);
++    }
++    let total: usize = components.iter().map(|(_, len)| len).sum();
++    println!(
++        "    {:<50}{:>8}",
++        "serialised cryptographic bundle-component total", total
++    );
++
++    // Protocol objects, at the fixed plaintext.
++    process_prekey_bundle(
++        &bob_address,
++        &mut alice_store.session_store,
++        &mut alice_store.identity_store,
++        &bundle,
++        SystemTime::now(),
++        &mut rng,
++    )
++    .await?;
++
++    let outgoing = encrypt(&mut alice_store, &bob_address, PLAINTEXT).await?;
++    assert_eq!(outgoing.message_type(), CiphertextMessageType::PreKey);
++    let initial_len = outgoing.serialize().len();
++
++    let received = CiphertextMessage::PreKeySignalMessage(PreKeySignalMessage::try_from(
++        outgoing.serialize(),
++    )?);
++    let plaintext = decrypt(&mut bob_store, &alice_address, &received).await?;
++    assert_eq!(plaintext, PLAINTEXT.as_bytes());
++
++    let reply = encrypt(&mut bob_store, &alice_address, PLAINTEXT).await?;
++    assert_eq!(reply.message_type(), CiphertextMessageType::Whisper);
++    let reply_len = reply.serialize().len();
++
++    println!("  Protocol objects");
++    println!(
++        "    {:<50}{:>8}",
++        "initial PreKeySignalMessage (serialised)", initial_len
++    );
++    println!(
++        "    {:<50}{:>8}",
++        "first reply, Whisper (serialised)", reply_len
++    );
++
++    Ok(())
++}
++
++/// Create an in-memory store with a fixed registration id and a fresh X25519 identity.
++fn make_store<R: Rng + CryptoRng>(
++    registration_id: u32,
++    csprng: &mut R,
++) -> Result<InMemSignalProtocolStore, SignalProtocolError> {
++    let identity = IdentityKeyPair::generate(&mut *csprng);
++    InMemSignalProtocolStore::new(identity, registration_id)
++}
++
++/// Publish the responder's bundle at the fixed identifiers, with or without a one-time curve
++/// prekey, persisting the private halves so the handshake can complete.
++async fn publish_bundle<R: Rng + CryptoRng>(
++    store: &mut InMemSignalProtocolStore,
++    mode: Mode,
++    csprng: &mut R,
++) -> Result<PreKeyBundle, SignalProtocolError> {
++    let identity = store.get_identity_key_pair().await?;
++
++    let signed_pre_key_pair = KeyPair::generate(&mut *csprng);
++    let signed_pre_key_signature = identity
++        .private_key()
++        .calculate_signature(&signed_pre_key_pair.public_key.serialize(), &mut *csprng)?;
++
++    let signed_kem_pair = kem::KeyPair::generate(KEM_KEY_TYPE, &mut *csprng);
++    let signed_kem_signature = identity
++        .private_key()
++        .calculate_signature(&signed_kem_pair.public_key.serialize(), &mut *csprng)?;
++
++    let one_time_pre_key_pair = mode.has_one_time().then(|| KeyPair::generate(&mut *csprng));
++    let one_time_pre_key = one_time_pre_key_pair
++        .as_ref()
++        .map(|pair| (ONE_TIME_PRE_KEY_ID.into(), pair.public_key));
++
++    let bundle = PreKeyBundle::new(
++        store.get_local_registration_id().await?,
++        DEVICE_ID.into(),
++        one_time_pre_key,
++        SIGNED_PRE_KEY_ID.into(),
++        signed_pre_key_pair.public_key,
++        signed_pre_key_signature.to_vec(),
++        *identity.identity_key(),
++    )?
++    .with_kyber_pre_key(
++        KYBER_PRE_KEY_ID.into(),
++        signed_kem_pair.public_key.clone(),
++        signed_kem_signature.to_vec(),
++    );
++
++    store
++        .save_signed_pre_key(
++            SIGNED_PRE_KEY_ID.into(),
++            &SignedPreKeyRecord::new(
++                SIGNED_PRE_KEY_ID.into(),
++                Timestamp::from_epoch_millis(0),
++                &signed_pre_key_pair,
++                &signed_pre_key_signature,
++            ),
++        )
++        .await?;
++    store
++        .save_kyber_pre_key(
++            KYBER_PRE_KEY_ID.into(),
++            &KyberPreKeyRecord::new(
++                KYBER_PRE_KEY_ID.into(),
++                Timestamp::from_epoch_millis(0),
++                &signed_kem_pair,
++                &signed_kem_signature,
++            ),
++        )
++        .await?;
++
++    if let Some(pair) = one_time_pre_key_pair.as_ref() {
++        store
++            .save_pre_key(
++                ONE_TIME_PRE_KEY_ID.into(),
++                &PreKeyRecord::new(ONE_TIME_PRE_KEY_ID.into(), pair),
++            )
++            .await?;
++    }
++
++    Ok(bundle)
++}
++
++async fn encrypt(
++    store: &mut InMemSignalProtocolStore,
++    remote_address: &ProtocolAddress,
++    msg: &str,
++) -> Result<CiphertextMessage, SignalProtocolError> {
++    message_encrypt(
++        msg.as_bytes(),
++        remote_address,
++        &mut store.session_store,
++        &mut store.identity_store,
++        SystemTime::now(),
++    )
++    .await
++}
++
++async fn decrypt(
++    store: &mut InMemSignalProtocolStore,
++    remote_address: &ProtocolAddress,
++    msg: &CiphertextMessage,
++) -> Result<Vec<u8>, SignalProtocolError> {
++    let mut csprng = OsRng.unwrap_err();
++    message_decrypt(
++        msg,
++        remote_address,
++        &mut store.session_store,
++        &mut store.identity_store,
++        &mut store.pre_key_store,
++        &store.signed_pre_key_store,
++        &mut store.kyber_pre_key_store,
++        &mut csprng,
++    )
++    .await
++}

@@ -1,0 +1,51 @@
+=== Serialised sizes: Kyber1024 KEM + X25519 identity (XEdDSA) ===
+
+Fixed inputs
+  plaintext                  : "pqs-v7 fixed size-capture plaintext" (35 B)
+  device id                  : 1
+  signed prekey id           : 22
+  signed KEM prekey id       : 8000
+  one-time curve prekey id   : 8001
+  initiator registration id  : 1234
+  responder registration id  : 5678
+
+Primitive lengths (identical in both modes)
+  quantity                             raw   tagged
+  Kyber1024 public key                1568     1569
+  Kyber1024 secret key                3168     3169
+  Kyber1024 ciphertext                1568     1569
+  KEM shared secret                     32        -
+  X25519 identity public key            32       33
+  X25519 identity secret key            32        -
+  XEdDSA signature                      64        -
+  X25519 ratchet public key             32       33
+
+--- Mode: no one-time curve key ---
+  Published bundle components
+    identity key (X25519, tagged)                           33
+    signed X25519 ratchet key (tagged)                      33
+    ratchet key signature (raw)                             64
+    signed Kyber1024 prekey (tagged)                      1569
+    signed KEM prekey signature (raw)                       64
+    serialised cryptographic bundle-component total       1763
+  Protocol objects
+    initial PreKeySignalMessage (serialised)              1751
+    first reply, Whisper (serialised)                       98
+
+--- Mode: one-time curve key present ---
+  Published bundle components
+    identity key (X25519, tagged)                           33
+    signed X25519 ratchet key (tagged)                      33
+    ratchet key signature (raw)                             64
+    signed Kyber1024 prekey (tagged)                      1569
+    signed KEM prekey signature (raw)                       64
+    one-time X25519 prekey (tagged)                         33
+    serialised cryptographic bundle-component total       1796
+  Protocol objects
+    initial PreKeySignalMessage (serialised)              1754
+    first reply, Whisper (serialised)                       98
+
+All lengths in bytes. `raw` excludes and `tagged` includes the 1-byte algorithm
+identifier this artefact prefixes to serialised keys and KEM ciphertexts. Shared
+secrets, private curve keys, and XEdDSA signatures carry no such tag, so they are
+reported once.

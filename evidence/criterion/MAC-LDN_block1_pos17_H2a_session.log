@@ -1,0 +1,12 @@
+    Finished `bench` profile [optimized] target(s) in 0.32s
+     Running benches/session.rs (target/release/deps/session-40d4814adda41459)
+Gnuplot not found, using plotters backend
+Benchmarking initiate session and encrypt first message
+Benchmarking initiate session and encrypt first message: Warming up for 3.0000 s
+Benchmarking initiate session and encrypt first message: Collecting 100 samples in estimated 5.5426 s (400 iterations)
+Benchmarking initiate session and encrypt first message: Analyzing
+initiate session and encrypt first message
+                        time:   [13.642 ms 13.666 ms 13.690 ms]
+Found 4 outliers among 100 measurements (4.00%)
+  4 (4.00%) high mild
+

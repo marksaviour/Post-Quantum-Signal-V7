@@ -1,0 +1,18 @@
+    Finished `bench` profile [optimized] target(s) in 0.14s
+     Running benches/kem.rs (target/release/deps/kem-764a000232294550)
+Gnuplot not found, using plotters backend
+
+KEM wire sizes (bytes; _raw excludes, _tagged includes the 1-byte type tag):
+  kem          pk_raw  pk_tagged  sk_raw  sk_tagged  ct_raw  ct_tagged  secret
+  HQC256         7237       7238    7333       7334   14421      14422      32
+  MLKEM1024      1568       1569    3168       3169    1568       1569      32
+  Kyber1024      1568       1569    3168       3169    1568       1569      32
+
+Benchmarking HQC256_decapsulate
+Benchmarking HQC256_decapsulate: Warming up for 3.0000 s
+Benchmarking HQC256_decapsulate: Collecting 100 samples in estimated 5.8253 s (600 iterations)
+Benchmarking HQC256_decapsulate: Analyzing
+HQC256_decapsulate      time:   [9.7062 ms 9.7232 ms 9.7405 ms]
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) high mild
+

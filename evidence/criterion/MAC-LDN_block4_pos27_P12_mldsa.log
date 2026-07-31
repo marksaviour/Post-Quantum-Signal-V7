@@ -1,0 +1,20 @@
+    Finished `bench` profile [optimized] target(s) in 0.17s
+     Running benches/mldsa.rs (target/release/deps/mldsa-7c808ade2dc6a576)
+Gnuplot not found, using plotters backend
+
+ML-DSA-87 sizes (bytes):
+  public key : 2592
+  secret key : 4896
+  signature  : 4627
+
+Benchmarking MLDSA87_verify
+Benchmarking MLDSA87_verify: Warming up for 3.0000 s
+Benchmarking MLDSA87_verify: Collecting 100 samples in estimated 5.3708 s (61k iterations)
+Benchmarking MLDSA87_verify: Analyzing
+MLDSA87_verify          time:   [87.853 µs 87.931 µs 88.008 µs]
+Found 4 outliers among 100 measurements (4.00%)
+  1 (1.00%) low severe
+  1 (1.00%) low mild
+  1 (1.00%) high mild
+  1 (1.00%) high severe
+

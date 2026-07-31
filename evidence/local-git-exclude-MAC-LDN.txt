@@ -1,0 +1,18 @@
+# git ls-files --others --exclude-from=.git/info/exclude
+# Lines that start with '#' are comments.
+# For a project mostly in C, the following would be a good set of
+# exclude patterns (uncomment them if you want to use them):
+# *.[oa]
+# *~
+
+# --- MAC-LDN campaign local excludes (evidence outputs + build cruft) ---
+# These are still committed at step 8 via `git add -A -f evidence/`; excluding
+# them here only keeps run-block.ps1's `git status --porcelain` clean so the
+# recorded v2 harness commit is not spuriously flagged "working tree dirty".
+/evidence/correctness-gates-*.md
+/evidence/harness-diffs/
+/third-party/hqc-kem/target/
+# Blanket: never let untracked evidence OUTPUT dirty any worktree (v1/baseline branches
+# lack evidence/ ignore rules entirely). Tracked evidence/schedule/* is unaffected;
+# step 8's `git add -A -f evidence/` still commits everything.
+/evidence/

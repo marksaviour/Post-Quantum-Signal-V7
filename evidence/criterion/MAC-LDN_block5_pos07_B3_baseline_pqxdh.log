@@ -1,0 +1,14 @@
+    Finished `bench` profile [optimized] target(s) in 0.15s
+     Running benches/baseline_pqxdh.rs (target/release/deps/baseline_pqxdh-5420c15aa404d5c4)
+Gnuplot not found, using plotters backend
+Benchmarking baseline decrypt first message
+Benchmarking baseline decrypt first message: Warming up for 3.0000 s
+Benchmarking baseline decrypt first message: Collecting 100 samples in estimated 6.1601 s (20k iterations)
+Benchmarking baseline decrypt first message: Analyzing
+baseline decrypt first message
+                        time:   [326.24 µs 326.47 µs 326.69 µs]
+Found 9 outliers among 100 measurements (9.00%)
+  2 (2.00%) low severe
+  4 (4.00%) low mild
+  3 (3.00%) high mild
+

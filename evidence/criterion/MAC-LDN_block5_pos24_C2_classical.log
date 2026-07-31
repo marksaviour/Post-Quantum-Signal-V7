@@ -1,0 +1,20 @@
+    Finished `bench` profile [optimized] target(s) in 0.14s
+     Running benches/classical.rs (target/release/deps/classical-59a5c80ea0596a48)
+Gnuplot not found, using plotters backend
+
+X25519 and XEdDSA sizes (bytes):
+  public key  : 32
+  private key : 32
+  signature   : 64
+
+Benchmarking X25519_agree
+Benchmarking X25519_agree: Warming up for 3.0000 s
+Benchmarking X25519_agree: Collecting 100 samples in estimated 5.0614 s (136k iterations)
+Benchmarking X25519_agree: Analyzing
+X25519_agree            time:   [37.254 µs 37.505 µs 37.921 µs]
+Found 16 outliers among 100 measurements (16.00%)
+  1 (1.00%) low severe
+  1 (1.00%) low mild
+  12 (12.00%) high mild
+  2 (2.00%) high severe
+

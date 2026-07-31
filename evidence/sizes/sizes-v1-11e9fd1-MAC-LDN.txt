@@ -1,0 +1,51 @@
+=== Serialised sizes: MLKEM1024 KEM + ML-DSA-87 identity ===
+
+Fixed inputs
+  plaintext                  : "pqs-v7 fixed size-capture plaintext" (35 B)
+  device id                  : 1
+  signed prekey id           : 22
+  signed KEM prekey id       : 8000
+  one-time KEM prekey id     : 8001
+  initiator registration id  : 1234
+  responder registration id  : 5678
+
+Primitive lengths (identical in both modes)
+  quantity                             raw   tagged
+  MLKEM1024 public key                1568     1569
+  MLKEM1024 secret key                3168     3169
+  MLKEM1024 ciphertext                1568     1569
+  KEM shared secret                     32        -
+  ML-DSA-87 public key                2592     2593
+  ML-DSA-87 secret key                4896     4897
+  ML-DSA-87 signature                 4627        -
+  X25519 ratchet public key             32       33
+
+--- Mode: last-resort only ---
+  Published bundle components
+    identity key (ML-DSA-87, tagged)                      2593
+    signed X25519 ratchet key (tagged)                      33
+    ratchet key signature (raw)                           4627
+    signed MLKEM1024 prekey (tagged)                      1569
+    signed KEM prekey signature (raw)                     4627
+    serialised cryptographic bundle-component total      13449
+  Protocol objects
+    initial PreKeySignalMessage (serialised)              8942
+    first reply, Whisper (serialised)                       98
+
+--- Mode: last-resort plus one-time ---
+  Published bundle components
+    identity key (ML-DSA-87, tagged)                      2593
+    signed X25519 ratchet key (tagged)                      33
+    ratchet key signature (raw)                           4627
+    signed MLKEM1024 prekey (tagged)                      1569
+    signed KEM prekey signature (raw)                     4627
+    one-time MLKEM1024 prekey (tagged)                    1569
+    one-time KEM prekey signature (raw)                   4627
+    serialised cryptographic bundle-component total      19645
+  Protocol objects
+    initial PreKeySignalMessage (serialised)             10517
+    first reply, Whisper (serialised)                       98
+
+All lengths in bytes. `raw` excludes and `tagged` includes the 1-byte algorithm
+identifier this artefact prefixes to serialised keys and KEM ciphertexts. Shared
+secrets and ML-DSA signatures carry no such tag, so they are reported once.

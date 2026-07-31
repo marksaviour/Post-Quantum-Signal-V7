@@ -1,0 +1,21 @@
+    Finished `bench` profile [optimized] target(s) in 0.17s
+     Running benches/kem.rs (target/release/deps/kem-764a000232294550)
+Gnuplot not found, using plotters backend
+
+KEM wire sizes (bytes; _raw excludes, _tagged includes the 1-byte type tag):
+  kem          pk_raw  pk_tagged  sk_raw  sk_tagged  ct_raw  ct_tagged  secret
+  HQC256         7237       7238    7333       7334   14421      14422      32
+  MLKEM1024      1568       1569    3168       3169    1568       1569      32
+  Kyber1024      1568       1569    3168       3169    1568       1569      32
+
+Benchmarking MLKEM1024_generate
+Benchmarking MLKEM1024_generate: Warming up for 3.0000 s
+Benchmarking MLKEM1024_generate: Collecting 100 samples in estimated 5.2468 s (61k iterations)
+Benchmarking MLKEM1024_generate: Analyzing
+MLKEM1024_generate      time:   [86.037 µs 86.606 µs 87.581 µs]
+Found 13 outliers among 100 measurements (13.00%)
+  1 (1.00%) low severe
+  3 (3.00%) low mild
+  6 (6.00%) high mild
+  3 (3.00%) high severe
+

@@ -1,0 +1,5 @@
+ rust/protocol/Cargo.toml                |   8 +
+ rust/protocol/benches/baseline_pqxdh.rs | 303 +++++++++++++++++++++++++
+ rust/protocol/benches/classical.rs      |  85 +++++++
+ rust/protocol/examples/sizes.rs         | 387 ++++++++++++++++++++++++++++++++
+ 4 files changed, 783 insertions(+)

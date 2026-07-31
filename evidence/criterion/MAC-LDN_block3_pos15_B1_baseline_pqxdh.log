@@ -1,0 +1,13 @@
+    Finished `bench` profile [optimized] target(s) in 0.15s
+     Running benches/baseline_pqxdh.rs (target/release/deps/baseline_pqxdh-5420c15aa404d5c4)
+Gnuplot not found, using plotters backend
+Benchmarking baseline initiate session and encrypt first message
+Benchmarking baseline initiate session and encrypt first message: Warming up for 3.0000 s
+Benchmarking baseline initiate session and encrypt first message: Collecting 100 samples in estimated 5.8485 s (15k iterations)
+Benchmarking baseline initiate session and encrypt first message: Analyzing
+baseline initiate session and encrypt first message
+                        time:   [384.90 µs 385.60 µs 386.41 µs]
+Found 3 outliers among 100 measurements (3.00%)
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+
